@@ -16,8 +16,8 @@ settings: `{api_base, download_dir, quality, workers, retries, translation, roma
 - GET `/api/settings` → settings
 - PATCH `/api/settings` 传入 settings 可修改字段 → settings（目录立即检查是否可写）
 - POST `/api/folder/pick` → `{path}` 系统目录选择器，不可用返回清楚错误；仍可手输路径
-- POST `/api/downloads` `{playlist_id, song_ids:[id]}` song_ids 省略或null代表整单，空数组报错。→ `{added,existing,total}` 服务端按最新保存设置排队；需要先打开该歌单，后端缓存song详情。
-- GET `/api/downloads` → `{jobs:[{id,song_id,name,artists,album,playlist,status,progress,downloaded,total,speed,quality,actual_quality,path,error,warnings,attempt}],summary:{total,queued,active,completed,failed,paused,cancelled,skipped},paused,workers}` status queued/resolving/downloading/tagging/completed/failed/paused/cancelled/skipped，progress 0–100，speed bytes/s。
+- POST `/api/downloads` `{playlist_id, song_ids:[id]}` song_ids 省略或null代表整单，空数组报错。→ `{added,existing,total}` 服务端按最新保存设置排队；需要先打开该歌单，后端缓存song详情。**`playlist_id` 为空时进入单曲下载模式**：只认 `song_ids`（可多个），按 ID 直接取歌曲详情，文件落在下载目录根下（不建歌单项子目录），重试也保持同一目录；返回额外带 `missing`（无法获取的数量）。
+- GET `/api/downloads` → `{jobs:[{id,song_id,name,artists,album,playlist,single,status,progress,downloaded,total,speed,quality,actual_quality,path,error,warnings,attempt}],summary:{total,queued,active,completed,failed,paused,cancelled,skipped},paused,workers}` status queued/resolving/downloading/tagging/completed/failed/paused/cancelled/skipped，progress 0–100，speed bytes/s；`single` 为 true 表示该任务来自单曲下载。
 - POST `/api/downloads/action` `{action:"pause"|"resume"|"retry_failed"|"cancel_all"|"clear_finished"}` → `{ok:true}` pause停止领取新任务，不中断正在传输的文件；cancel_all会中断正在下载；界面需准确描述。
 - POST `/api/downloads/<job_id>/action` `{action:"retry"|"cancel"}` → `{ok:true}`
 - GET `/api/downloads/report` → 下载 JSON 报告，不含cookie/url

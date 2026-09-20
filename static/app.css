@@ -125,6 +125,9 @@ main { max-width: 1530px; margin: 0 auto; padding: 38px 44px 0; min-height: calc
 .share-form label .icon { width: 16px; height: 16px; }
 .share-form input { border: 0; background: transparent; min-width: 0; flex: 1; padding: 8px 14px; font-size: 11px; outline-offset: -2px; }
 .share-form .button { min-height: 36px; font-size: 11px; padding: 9px 17px; }
+.import-mode { display: inline-flex; gap: 2px; padding: 2px; margin-right: 10px; border-radius: 7px; background: #ecefe4; flex-shrink: 0; }
+.import-mode button { padding: 4px 10px; border-radius: 5px; font-size: 10px; color: #8b9384; }
+.import-mode button.active { background: #fdfef8; color: var(--green); font-weight: 600; box-shadow: 0 1px 3px #3d57300f; }
 input, select { color: var(--text); }
 input::placeholder { color: #a0a598; opacity: 1; }
 .field-hint { color: #899080; font-size: 11px; line-height: 1.8; margin-top: 7px; }

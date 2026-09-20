@@ -47,6 +47,19 @@ def is_file(value):
         return False
 
 
+def job_folder(settings, playlist_name, playlist_id):
+    """Where a job's files go.
+
+    Single-song downloads pass playlist_id=None: they have no playlist to group
+    under, so they land directly in the download folder even when
+    「按歌单建立文件夹」is on.
+    """
+    folder = Path(settings["download_dir"])
+    if settings["playlist_folder"] and playlist_name and playlist_id is not None:
+        folder /= safe_name(playlist_name, 65) + f" [{playlist_id}]"
+    return folder
+
+
 class Cancelled(Exception):
     pass
 
@@ -124,7 +137,7 @@ class DownloadManager:
                         cancelled=counts["cancelled"], skipped=counts["skipped"]),
                         paused=self.paused, workers=self.store.settings["workers"])
 
-    def enqueue(self, playlist, songs):
+    def enqueue(self, playlist, songs, use_playlist_folder=True):
         with self.condition:
             if len(self.jobs) + len(songs) > MAX_JOBS:
                 raise UserError(f"队列最多保留 {MAX_JOBS} 个任务，请先清理已结束的任务")
@@ -132,9 +145,7 @@ class DownloadManager:
             existing_keys = set()
             added, existing = 0, 0
             for song in songs:
-                folder = Path(settings["download_dir"])
-                if settings["playlist_folder"]:
-                    folder /= safe_name(playlist["name"], 65) + f" [{playlist['id']}]"
+                folder = job_folder(settings, playlist["name"], playlist["id"] if use_playlist_folder else None)
                 key = path_key(folder / f"{song['id']}-{settings['quality']}")
                 # Only an in-flight task or one that actually produced a file
                 # blocks a new job; failed and cancelled ones must stay retryable
@@ -147,7 +158,8 @@ class DownloadManager:
                     continue
                 self.jobs.append(dict(id=uuid.uuid4().hex, song_id=song["id"], name=song["name"],
                                       artists=song["artists"], album=song["album"], playlist=playlist["name"],
-                                      playlist_id=playlist["id"], status="queued", progress=0,
+                                      playlist_id=playlist["id"], single=not use_playlist_folder,
+                                      status="queued", progress=0,
                                       downloaded=0, total=0, speed=0, quality=settings["quality"],
                                       actual_quality="", path="", error="", warnings=[], attempt=0,
                                       settings=settings, song=song, target_key=key))
@@ -216,9 +228,8 @@ class DownloadManager:
     def _adopt_current_settings(self, job):
         """A retry follows the settings in force now, so a fix actually applies."""
         settings = dict(self.store.settings)
-        folder = Path(settings["download_dir"])
-        if settings["playlist_folder"]:
-            folder /= safe_name(job["playlist"], 65) + f" [{job['playlist_id']}]"
+        group_id = None if job.get("single") else job.get("playlist_id")
+        folder = job_folder(settings, job.get("playlist"), group_id)
         job["settings"] = settings
         job["quality"] = settings["quality"]
         job["target_key"] = str(folder / f"{job['song_id']}-{settings['quality']}")

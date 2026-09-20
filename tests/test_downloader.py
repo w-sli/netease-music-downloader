@@ -280,6 +280,51 @@ class QueueNamingTests(unittest.TestCase):
         with mock.patch("os.path.normcase", side_effect=lambda value: str(value).replace("\\", "/").lower()):
             self.assertEqual(path_key("C:\\Music\\A.mp3"), path_key("c:/music/a.mp3"))
 
+    # ---------- 单曲下载（不依赖歌单） ----------
+    def test_single_song_lands_in_the_download_root(self):
+        """Single downloads have no playlist, so they must not use a subfolder."""
+        self.store.settings["playlist_folder"] = True
+        manager = self.build_manager()
+        manager.enqueue(dict(id=0, name="单曲下载"), [song(2001, "单曲一", "歌手甲")],
+                        use_playlist_folder=False)
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            snap = manager.snapshot()
+            if not snap["summary"]["active"] and not snap["summary"]["queued"]:
+                break
+            time.sleep(0.05)
+        job = snap["jobs"][0]
+        self.assertEqual(job["status"], "completed")
+        self.assertTrue(job["single"])
+        self.assertEqual(Path(job["path"]).parent, self.out, "单曲应直接落在下载根目录")
+        self.assertEqual(self.audio_files(), ["单曲一 - 歌手甲.mp3"])
+
+    def test_single_song_retry_keeps_the_same_folder(self):
+        """A retry must not silently move the file into a playlist folder."""
+        self.store.settings["playlist_folder"] = True
+        manager = self.build_manager()
+        manager.enqueue(dict(id=0, name="单曲下载"), [song(2001, "单曲一", "歌手甲")],
+                        use_playlist_folder=False)
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if not manager.snapshot()["summary"]["active"]:
+                break
+            time.sleep(0.05)
+        job_id = manager.snapshot()["jobs"][0]["id"]
+        manager.action("cancel", job_id)
+        manager.action("retry", job_id)
+        job = next(j for j in manager.jobs if j["id"] == job_id)
+        self.assertEqual(Path(job["target_key"]).parent, self.out,
+                         "重试后仍应指向下载根目录，而不是“单曲下载 [0]”子目录")
+
+    def test_playlist_download_still_uses_its_folder(self):
+        self.store.settings["playlist_folder"] = True
+        manager = self.build_manager()
+        manager.enqueue(self.playlist("我的歌单", 77), [song(2002, "歌单一", "歌手乙")])
+        job = manager.jobs[0]
+        self.assertEqual(Path(job["target_key"]).parent.name, "我的歌单 [77]")
+        self.assertFalse(job["single"])
+
 
 class NoLengthHandler(BaseHTTPRequestHandler):
     """Serves the fixture without Content-Length (HTTP/1.0 close-delimited)."""

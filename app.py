@@ -297,6 +297,17 @@ def create_app(data_dir=None, demo=False, port=36523, api=None):
     @app.post("/api/downloads")
     def enqueue():
         data = body()
+        if data.get("playlist_id") is None:
+            # 单曲下载：不需要歌单，直接按歌曲 ID 取详情并入队
+            ids = data.get("song_ids")
+            if not isinstance(ids, list) or not ids:
+                raise UserError("请填写歌曲 ID 或单曲链接")
+            songs, missing = api.songs(ids)
+            result = manager.enqueue(dict(id=0, name="单曲下载"), songs, use_playlist_folder=False)
+            if missing:
+                # 部分成功时也告知用户，避免以为全都下上了
+                result["missing"] = len(missing)
+            return jsonify(result)
         try:
             pid = int(data.get("playlist_id"))
         except (TypeError, ValueError) as e:

@@ -15,6 +15,7 @@ with Docker or `npx`, or reuse the one bundled with an installed SPlayer.
 ## Features
 
 - **Login**: QR code, SMS code, or pasting your own cookie.
+- **Single track**: paste a song share link or id and download it directly — no playlist needed.
 - **Your playlists**: all created and saved playlists (paged automatically), plus public
   playlists by link or id.
 - **Batch download**: whole playlist or a selection, 1–12 songs at a time (default 4),

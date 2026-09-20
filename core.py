@@ -262,6 +262,25 @@ class Netease:
         return {"playlist": {k: raw.get(k) for k in ("id", "name", "coverImgUrl", "trackCount", "description")},
                 "songs": [songs[i] for i in ids if i in songs], "missing": missing, "warnings": warnings}
 
+    def songs(self, song_ids):
+        """Look up songs by id, for downloading single tracks without a playlist."""
+        wanted = []
+        for value in song_ids:
+            text = str(value).strip()
+            if not text.isdigit() or int(text) <= 0:
+                raise UserError("歌曲 ID 必须是正整数")
+            wanted.append(int(text))
+        if not wanted:
+            raise UserError("请填写歌曲 ID 或单曲链接")
+        found, data = {}, self.call("/song/detail", {"ids": ",".join(map(str, wanted[:200]))})
+        for item in data.get("songs") or []:
+            if isinstance(item, dict) and str(item.get("id", "")).isdigit():
+                found[int(item["id"])] = normalize_song(item)
+        missing = [i for i in wanted if i not in found]
+        if not found:
+            raise UserError("没有找到这首歌，可能已下架或当前账号无权访问")
+        return [found[i] for i in wanted if i in found], missing
+
     def resolve(self, song_id, quality, fallback=False):
         reason = ""
         data = None

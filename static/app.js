@@ -5,7 +5,7 @@
 const state = {
   csrf: '', demo: false, user: null, settings: null, qualities: [], apiAvailable: true,
   playlists: [], filter: 'all', query: '',
-  current: null, selected: new Set(),
+  current: null, selected: new Set(), importMode: 'playlist',
   queue: null, queueFilter: 'all', queueQuery: '',
   queueTimer: null, qrTimer: null, smsTimer: null,
   dirty: false, polling: false, openingId: null,
@@ -154,6 +154,16 @@ function qualityLabel(value) {
 function parsePlaylistId(value) {
   const raw = String(value || '').trim();
   if (/^\d+$/.test(raw)) return Number(raw);
+  const match = raw.match(/(\d{4,})/);
+  return match ? Number(match[1]) : null;
+}
+
+/* 单曲链接形如 .../song?id=123、.../#/song?id=123，也允许直接填 ID */
+function parseSongId(value) {
+  const raw = String(value || '').trim();
+  if (/^\d+$/.test(raw)) return Number(raw);
+  const byId = raw.match(/[?&#/]id=(\d{4,})/) || raw.match(/\/song\/(\d{4,})/);
+  if (byId) return Number(byId[1]);
   const match = raw.match(/(\d{4,})/);
   return match ? Number(match[1]) : null;
 }
@@ -611,6 +621,23 @@ function updateSelection() {
   }
 }
 
+async function downloadSingleSong(songId) {
+  const button = $('#open-playlist-button');
+  setInline('share-error', '');
+  setBusy(button, true);
+  try {
+    const data = await api('/downloads', { method: 'POST', body: { song_ids: [songId] } });
+    toast('已加入 ' + data.added + ' 首歌曲' + (data.existing ? '，已在队列或已下载' : '')
+      + (data.missing ? '，' + data.missing + ' 首无法获取' : ''));
+    switchView('queue');
+    await pollQueue(true);
+  } catch (error) {
+    setInline('share-error', errorMessage(error));
+  } finally {
+    setBusy(button, false);
+  }
+}
+
 async function enqueue(songIds) {
   if (!state.current) return;
   const body = { playlist_id: state.current.playlist.id };
@@ -1017,10 +1044,33 @@ function bind() {
     switchView(button.dataset.view);
   }));
 
+  $$('[data-import-mode]').forEach((button) => button.addEventListener('click', () => {
+    state.importMode = button.dataset.importMode;
+    $$('[data-import-mode]').forEach((other) => {
+      const active = other === button;
+      other.classList.toggle('active', active);
+      other.setAttribute('aria-pressed', String(active));
+    });
+    const song = state.importMode === 'song';
+    text($('#import-label'), song ? '单曲' : '公开歌单');
+    text($('#import-action'), song ? '下载单曲' : '解析歌单');
+    $('#playlist-link').placeholder = song
+      ? '粘贴网易云单曲分享链接，或输入歌曲 ID'
+      : '粘贴网易云歌单分享链接，或输入歌单 ID';
+    setInline('share-error', '');
+  }));
+
   $('#share-form').addEventListener('submit', async (event) => {
     event.preventDefault();
-    const id = parsePlaylistId($('#playlist-link').value);
     setInline('share-error', '');
+    const value = $('#playlist-link').value;
+    if (state.importMode === 'song') {
+      const songId = parseSongId(value);
+      if (!songId) { setInline('share-error', '请输入有效的歌曲 ID 或单曲链接'); return; }
+      await downloadSingleSong(songId);
+      return;
+    }
+    const id = parsePlaylistId(value);
     if (!id) { setInline('share-error', '请输入有效的歌单 ID 或分享链接'); return; }
     await openPlaylist(id);
   });

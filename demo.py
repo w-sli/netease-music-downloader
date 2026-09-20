@@ -55,6 +55,22 @@ class DemoAPI:
         return dict(playlist=playlists[playlist_id] | {"description": "本地演示歌单 · 下载的是 5 秒测试音频，用于验证队列、歌词和标签。"},
                     songs=[dict(id=80001 + i, name=name, artists="拾音测试音源", album="离线演示", duration=5000, cover="") for i, name in enumerate(NAMES)], missing=[], warnings=[])
 
+    def songs(self, song_ids):
+        """单曲下载走这条路径：演示模式只认 80001–80008 这几个测试音轨。"""
+        catalog = {80001 + i: name for i, name in enumerate(NAMES)}
+        found, missing = [], []
+        for value in song_ids:
+            text = str(value).strip()
+            song_id = int(text) if text.isdigit() else -1
+            if song_id in catalog:
+                found.append(dict(id=song_id, name=catalog[song_id], artists="拾音测试音源",
+                                  album="离线演示", duration=5000, cover=""))
+            else:
+                missing.append(value)
+        if not found:
+            raise UserError("演示模式没有这首歌，请使用 80001–80008 之间的 ID")
+        return found, missing
+
     def resolve(self, song_id, quality, fallback=False):
         ext = "flac" if quality in {"lossless", "hires", "jymaster"} else "mp3"
         path = self.folder / ("sample." + ext)
