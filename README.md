@@ -13,6 +13,9 @@
 它只需要一个兼容 NeteaseCloudMusicApi 约定的本机接口服务——自己用 Docker 或 `npx` 起一个，
 或者复用你本机已安装的 SPlayer 内置服务，三种方式任选。
 
+**文档**：[开发说明](DEVELOPMENT.md)（架构/数据流/扩展步骤/设计取舍） ·
+[接口参考](API_CONTRACT.md) · [贡献指南](CONTRIBUTING.md) · [安全说明](SECURITY.md) · [English](README.en.md)
+
 ![界面截图](docs/screenshot.png)
 
 ## 功能
@@ -192,12 +195,26 @@ python3 -m venv .venv
 | `templates/index.html`、`static/app.css`、`static/app.js` | 网页界面（原生 HTML/CSS/JS，无打包步骤） |
 | `run.sh`、`run.ps1`、`run.bat` | 一键启动脚本（Linux/macOS、Windows） |
 | `requirements.txt`、`requirements-dev.txt` | 运行与开发依赖 |
-| `tests/test_lyrics.py` | 歌词合并与标签写入测试 |
-| `tests/test_downloader.py` | 命名、去重、已有检查、落盘、取消重试测试（本地 HTTP 夹具，不联外网） |
-| `tests/test_core.py` | 设置校验、文件名安全、接口客户端（含拒绝重定向）测试 |
-| `API_CONTRACT.md` | 前后端接口约定 |
+| `tests/` | `test_lyrics.py`（歌词与标签）、`test_downloader.py`（队列与落盘）、`test_core.py`（设置与接口客户端） |
+| `DEVELOPMENT.md` | **开发说明：架构、数据流、状态机、扩展步骤、设计取舍** |
+| `API_CONTRACT.md` | HTTP 接口参考（请求/响应、错误约定、队列操作语义） |
 | `LICENSE`、`THIRD_PARTY_NOTICES.md` | 许可与第三方说明（含与 SPlayer 的关系说明） |
 | `docs/` | README 使用的界面截图 |
+
+## 二次开发
+
+想改代码请先读 **[DEVELOPMENT.md](DEVELOPMENT.md)**，里面有：
+
+- 模块划分与依赖方向、一次下载的完整数据流与线程模型；
+- **「为什么这么设计」的取舍表**（接口参数为何走查询串、为何不跟随重定向、为何用硬链接提交、
+  取消/重试的所有权令牌、大小写不敏感的路径比较、并发上限为何与线程池绑定）。
+  这些地方改错的后果通常是「静默下错歌」或「覆盖文件」，比编译错误更难发现；
+- 数据格式：数据目录、`settings.json` 字段、任务记录字段与状态机；
+- 常见改动的操作清单（加接口 / 加音质 / 加设置项 / 加界面视图 / 换接口服务 / 支持新音频格式）；
+- 测试的三条硬规矩（不得联网、改行为就补测试、如何用 mock 覆盖 `os.link` 这类分支）；
+- 已知限制与非目标、按症状排查的对照表。
+
+接口细节见 [API_CONTRACT.md](API_CONTRACT.md)，参与贡献见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 测试
 

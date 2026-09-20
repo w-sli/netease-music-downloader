@@ -1,27 +1,121 @@
-# 拾音 · 本地歌单下载器 — 前后端约定
+# HTTP 接口参考
 
-所有 JSON API 位于同源 `/api`。失败 HTTP 4xx/5xx 返回 `{error: "可读中文消息"}`。启动网页用 GET `/api/bootstrap` 返回 `{csrf, settings, qualities, user, demo, api_available}`，JS 保存 csrf 并在所有 POST/PATCH/DELETE 使用 `X-CSRF-Token` 请求头。用户未登录 user 为 null，已登录 `{userId,nickname,avatarUrl}`。页面不要加载外部字体/JS。
+服务只监听 `127.0.0.1`，前端与接口同源。本文是前后端之间的约定，改接口时请同步更新本文与
+`DEVELOPMENT.md` 的说明。任务记录与状态机的完整说明见 `DEVELOPMENT.md` 第 5 节。
 
-settings: `{api_base, download_dir, quality, workers, retries, translation, romanization, save_lrc, embed_lyrics, cover, playlist_folder, playback_fallback}`。workers 1–12; retries 0–5; quality 为 standard,higher,exhigh,lossless,hires,jyeffect,sky,dolby,jymaster。默认 exhigh，4 workers。qualities 为 `[{value,label}]`。
+## 通用约定
 
-- GET `/api/session` → `{user}`（验证当前会话）
-- POST `/api/auth/qr` → `{key,image,url}` image 为 data URL
-- POST `/api/auth/qr/check` `{key}` → `{code,message,user?}` 800过期801等待802确认803成功
-- POST `/api/auth/sms/send` `{phone,countrycode}` → `{ok:true}`
-- POST `/api/auth/sms/login` `{phone,countrycode,captcha}` → `{user}`
-- POST `/api/auth/cookie` `{cookie}` → `{user}` 用户自行复制Cookie；输入使用密码框，不留浏览器存储
-- POST `/api/auth/logout` → `{ok:true}`
-- GET `/api/playlists` → `{playlists:[{id,name,coverImgUrl,trackCount,creator:{nickname},owned}],total}` 所有个人歌单含收藏和喜欢
-- GET `/api/playlists/<id>` → `{playlist:{id,name,coverImgUrl,trackCount,description},songs:[{id,name,artists,album,duration,cover}],missing:[ids],warnings:[str]}` duration 毫秒，artists 已拼接字符串。支持用户直接输入歌单数字ID或网易分享链接，由前端提取id。
-- GET `/api/settings` → settings
-- PATCH `/api/settings` 传入 settings 可修改字段 → settings（目录立即检查是否可写）
-- POST `/api/folder/pick` → `{path}` 系统目录选择器，不可用返回清楚错误；仍可手输路径
-- POST `/api/downloads` `{playlist_id, song_ids:[id]}` song_ids 省略或null代表整单，空数组报错。→ `{added,existing,total}` 服务端按最新保存设置排队；需要先打开该歌单，后端缓存song详情。**`playlist_id` 为空时进入单曲下载模式**：只认 `song_ids`（可多个），按 ID 直接取歌曲详情，文件落在下载目录根下（不建歌单项子目录），重试也保持同一目录；返回额外带 `missing`（无法获取的数量）。
-- GET `/api/downloads` → `{jobs:[{id,song_id,name,artists,album,playlist,single,status,progress,downloaded,total,speed,quality,actual_quality,path,error,warnings,attempt}],summary:{total,queued,active,completed,failed,paused,cancelled,skipped},paused,workers}` status queued/resolving/downloading/tagging/completed/failed/paused/cancelled/skipped，progress 0–100，speed bytes/s；`single` 为 true 表示该任务来自单曲下载。
-- POST `/api/downloads/action` `{action:"pause"|"resume"|"retry_failed"|"cancel_all"|"clear_finished"}` → `{ok:true}` pause停止领取新任务，不中断正在传输的文件；cancel_all会中断正在下载；界面需准确描述。
-- POST `/api/downloads/<job_id>/action` `{action:"retry"|"cancel"}` → `{ok:true}`
-- GET `/api/downloads/report` → 下载 JSON 报告，不含cookie/url
+- 所有接口位于 `/api` 下，请求与响应均为 JSON（`/api/downloads/report` 例外，见下）。
+- **错误**：HTTP 400/403/500 一律返回 `{error: "可读中文消息"}`。业务错误是 400，
+  缺少/错误令牌是 403，未预期的异常是 500（日志只记异常类型与消息，不写堆栈，避免泄漏 Cookie）。
+- **CSRF**：所有写操作（POST/PATCH/DELETE/PUT）必须带 `X-CSRF-Token` 请求头，
+  值取自 `GET /api/bootstrap` 的 `csrf`。缺少或不匹配返回 403。
+  服务重启会换令牌，前端收到 403 时会重新取一次令牌并重试一次。
+- **额外防护**：`Host` 必须是回环地址；带 `Sec-Fetch-Site: cross-site` 的请求、以及 `Origin`
+  与自身不同源的请求一律 403。写操作之外的 GET 同样受这两条保护。
+- **接口来源**：`api_base` 只接受回环地址（`127.0.0.1` / `localhost` / `::1`，仅 http）。
 
-页面设计要求：中文精致易用，侧边导航“我的歌单/下载队列/下载设置”；顶端账号与接口状态，未登录时有明显二维码登录入口；歌单网格+歌单详情歌曲可选（全选/筛选/整单下载），公开歌单链接入口；队列有总体进度/状态筛选/单项进度/速度/失败原因/重试/取消；设置下载目录/音质/并发/重试/歌词合并翻译罗马音/内嵌歌词/保存LRC/封面/按歌单建文件夹/API地址/播放地址后备；没有真实数据时正确空状态。配色暖灰底+深墨文本+森林绿强调，响应式桌面和窄屏，原生HTML/CSS/JS，无打包。图标可内联SVG，不依赖联网。
+## 启动与状态
 
-`--demo` 提供隔离的模拟账号、歌单与本地生成的音频下载（页面必须明显标识演示），用于完整交互测试，绝不冒充真实网易账号或资源。
+| 接口 | 请求 | 响应 |
+| --- | --- | --- |
+| `GET /api/bootstrap` | — | `{csrf, settings, qualities:[{value,label}], user, demo, api_available}` |
+| `GET /api/session` | — | `{user}`，向接口重新确认登录状态 |
+| `POST /api/cache/clear` | — | `{cleared:n}` 丢弃服务端缓存的歌单详情（前端“刷新歌单”会调用） |
+
+`user` 未登录为 `null`，已登录为 `{userId,nickname,avatarUrl}`。
+`demo` 为 `true` 时页面必须显示演示标识。
+
+## 登录
+
+| 接口 | 请求 | 响应 |
+| --- | --- | --- |
+| `POST /api/auth/qr` | — | `{key,image,url}`，`image` 是二维码 data URL |
+| `POST /api/auth/qr/check` | `{key}` | `{code,message,user?}`：800 过期 / 801 待扫码 / 802 待确认 / 803 成功 |
+| `POST /api/auth/sms/send` | `{phone,countrycode}` | `{ok:true}`，同一号码 60 秒内只允许发一次 |
+| `POST /api/auth/sms/login` | `{phone,countrycode,captcha}` | `{user}` |
+| `POST /api/auth/cookie` | `{cookie}` | `{user}`，Cookie 由用户自行从浏览器复制 |
+| `POST /api/auth/logout` | — | `{ok:true}` |
+
+Cookie 只保存在数据目录的 `session.json`（权限 600），不下发到浏览器存储，
+也不会出现在任何接口响应里。
+
+## 歌单与单曲
+
+| 接口 | 请求 | 响应 |
+| --- | --- | --- |
+| `GET /api/playlists` | — | `{playlists:[{id,name,coverImgUrl,trackCount,creator:{nickname},owned}],total}`，包含创建与收藏 |
+| `GET /api/playlists/<id>` | — | `{playlist:{id,name,coverImgUrl,trackCount,description}, songs:[{id,name,artists,album,duration,cover}], missing:[id], warnings:[str]}` |
+
+`songs[].duration` 单位为毫秒，`artists` 已拼接为字符串。`missing` 是无法获取详情的歌曲
+（下架或无权限），`warnings` 是给用户看的说明。详情在服务端缓存 10 分钟。
+
+歌单 ID 与单曲 ID 都由前端从「分享链接或纯数字」中解析，后端只接受数字 ID。
+
+## 设置
+
+| 接口 | 请求 | 响应 |
+| --- | --- | --- |
+| `GET /api/settings` | — | settings |
+| `PATCH /api/settings` | 任意设置的子集 | 校验通过后的完整 settings |
+| `POST /api/folder/pick` | — | `{path,cancelled}` 或错误；取消不是错误 |
+
+settings 字段：`api_base`、`download_dir`、`quality`、`workers`(1–12)、`retries`(0–5)、
+`translation`、`romanization`、`save_lrc`、`embed_lyrics`、`cover`、`playlist_folder`、
+`playback_fallback`。`quality` 取值：`standard`、`higher`、`exhigh`、`lossless`、`hires`、
+`jyeffect`、`sky`、`dolby`、`jymaster`（默认 `exhigh`，默认 4 并发）。
+
+`PATCH` 的校验规则集中在 `core.Store.validated()`：未知字段、类型错误、越界数值、
+非绝对路径或不可写的目录、非回环的 `api_base` 都会被拒。启动时载入 `settings.json` 用的是
+同一套规则，因此手改文件不会绕过限制。
+
+## 下载队列
+
+| 接口 | 请求 | 响应 |
+| --- | --- | --- |
+| `POST /api/downloads` | 歌单：`{playlist_id, song_ids?}`；单曲：`{song_ids:[id]}` | `{added,existing,total,missing?}` |
+| `GET /api/downloads` | — | 见下 |
+| `POST /api/downloads/action` | `{action}` | `{ok:true}` |
+| `POST /api/downloads/<job_id>/action` | `{action}` | `{ok:true}` |
+| `GET /api/downloads/report` | — | 附件下载 `shiyin-downloads.json` |
+
+**入队**：`song_ids` 省略或为 `null` 表示整单；空数组报错。带 `playlist_id` 时必须先打开过该歌单
+（服务端有详情缓存），且所选歌曲必须属于该歌单。**不带 `playlist_id` 时进入单曲模式**：
+只认 `song_ids`（可多个），直接按 ID 取详情，文件落在下载目录根下、不建歌单项子目录，
+重试也保持同一目录；响应额外带 `missing`（无法获取的数量）。队列总上限 5000 条，超出报错。
+
+**队列状态**（`GET /api/downloads`）：
+
+```
+{jobs:[{id, song_id, name, artists, album, playlist, single,
+        status, progress, downloaded, total, speed,
+        quality, actual_quality, path, error, warnings, attempt}],
+ summary:{total, queued, active, completed, failed, cancelled, skipped, paused},
+ paused:bool, workers:int}
+```
+
+- `status`：`queued` / `resolving` / `downloading` / `tagging` / `completed` / `failed` /
+  `skipped` / `cancelled`。`completed` 与 `skipped` 都表示文件已在磁盘上，`skipped` 会在
+  `warnings` 里说明原因是本工具自己的记录还是外部同名文件。
+- `progress` 为 0–100，`speed` 为字节/秒，`single` 为 `true` 表示来自单曲下载。
+- 任务按加入顺序倒序返回（最新在前）。**内部字段**（`settings`、`song`、`target_key`）
+  不会出现在响应里；导出报告同样不含 Cookie 与音频 URL。
+- `summary.paused` 在暂停时等于等待中的任务数，前端判断暂停状态请用顶层的 `paused`。
+
+**队列操作**：
+
+| action | 作用 |
+| --- | --- |
+| `pause` / `resume` | 停止/恢复领取新任务；**不中断**正在传输的文件 |
+| `cancel_all` | 中断所有正在下载的文件，并取消等待中的任务 |
+| `retry_failed` | 把失败与已取消的任务重新排队，并按**当前**设置重算目录与音质 |
+| `clear_finished` | 从队列里移除已结束的记录，不动磁盘文件 |
+
+单任务操作为 `retry`（失败/已取消的任务）与 `cancel`（等待中或进行中）。
+
+## 演示模式
+
+`--demo` 时后端替换为 `demo.DemoAPI`，提供固定的模拟账号（本地演示用户）、三个演示歌单、
+8 首测试音轨（ID `80001`–`80008`，5 秒正弦波，由 ffmpeg 现场生成）与本地歌词。
+接口面与真实实现完全一致，音频由 `/demo/audio/<ext>` 以限速方式提供，
+便于在离线条件下验证队列、进度、取消与标签写入。页面必须明显标识演示状态。

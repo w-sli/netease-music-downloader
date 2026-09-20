@@ -10,6 +10,10 @@ merged into both the audio tags and `.lrc` files. No build step, no cloud servic
 It talks to a local NeteaseCloudMusicApi-compatible service on `127.0.0.1` — run one
 with Docker or `npx`, or reuse the one bundled with an installed SPlayer.
 
+**Docs**: [Development notes](DEVELOPMENT.md) (architecture, data flow, extension recipes,
+design trade-offs) · [HTTP API reference](API_CONTRACT.md) · [Contributing](CONTRIBUTING.md) ·
+[Security](SECURITY.md) · [中文](README.md)
+
 ![screenshot](docs/screenshot.png)
 
 ## Features
