@@ -1,4 +1,4 @@
-"""Run with .venv/bin/python -B -m unittest discover -s tests -v."""
+"""Run with: python -m pytest tests/ -q (requires ffmpeg)."""
 
 import base64
 from copy import deepcopy

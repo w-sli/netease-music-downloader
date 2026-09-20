@@ -1,13 +1,18 @@
-# 运行环境
+# 运行环境（双系统不要共用 .venv：Windows 是 Scripts/，Linux 是 bin/）
 .venv/
+.venv-*/
 venv/
 env/
 node_modules/
 
-# Python 缓存
+# Python 缓存与测试产物
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
 
 # 运行期产物
 output/
@@ -19,6 +24,8 @@ output/
 session.json
 settings.json
 downloads.json
+# 从界面导出的下载报告
+shiyin-downloads*.json
 
 # 媒体文件：避免误提交下载到的音乐与歌词
 *.mp3
@@ -35,6 +42,8 @@ downloads.json
 .idea/
 .vscode/
 *.swp
+*.orig
+*.rej
 .DS_Store
 Thumbs.db
 

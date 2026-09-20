@@ -23,6 +23,8 @@ DEFAULTS = dict(api_base="http://127.0.0.1:25884/api/netease",
                 quality="exhigh", workers=4, retries=2, translation=True,
                 romanization=False, save_lrc=True, embed_lyrics=True, cover=True,
                 playlist_folder=True, playback_fallback=False)
+# Hard ceiling so a malformed or hostile API response cannot drive an endless loop.
+MAX_SONGS = 20000
 
 
 class UserError(Exception):
@@ -56,19 +58,29 @@ class Store:
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.lock = threading.RLock()
-        self.settings = DEFAULTS | read_json(self.directory / "settings.json", {})
+        self.settings = self._load_settings()
         self.cookie = read_json(self.directory / "session.json", {}).get("cookie", "")
         self.user = None
 
-    def save_session(self, cookie, user):
-        with self.lock:
-            atomic_json(self.directory / "session.json", {"cookie": cookie})
-            self.cookie, self.user = cookie, user
+    def _load_settings(self):
+        """settings.json is untrusted input: a hand-edited or older file must not
+        bypass the constraints enforced on save."""
+        raw = read_json(self.directory / "settings.json", {})
+        if not isinstance(raw, dict):
+            return dict(DEFAULTS)
+        candidate = {key: value for key, value in (DEFAULTS | raw).items() if key in DEFAULTS}
+        try:
+            return self.validated(candidate, probe=False)
+        except UserError:
+            return dict(DEFAULTS)
 
-    def update(self, values):
+    def validated(self, values, probe=True):
+        """Return a normalized copy of `values`, raising UserError when invalid."""
         if not isinstance(values, dict) or set(values) - set(DEFAULTS):
             raise UserError("设置包含未知字段")
-        new = self.settings | values
+        new = dict(values)
+        if not isinstance(new["api_base"], str):
+            raise UserError("API 地址必须是文本")
         base = urlparse(new["api_base"])
         # Account cookies stay on loopback; an API server can be forwarded via SSH.
         if base.scheme != "http" or base.hostname not in {"127.0.0.1", "localhost", "::1"} or base.username or base.password or base.query or base.fragment:
@@ -87,16 +99,28 @@ class Store:
         folder = Path(new["download_dir"]).expanduser()
         if not folder.is_absolute():
             raise UserError("下载目录必须是绝对路径")
-        try:
-            folder.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryFile(dir=folder):
-                pass
-        except OSError as e:
-            raise UserError(f"下载目录不可写：{e.strerror}") from e
+        if probe:
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryFile(dir=folder):
+                    pass
+            except OSError as e:
+                raise UserError(f"下载目录不可写：{e.strerror}") from e
         new["download_dir"] = str(folder.resolve())
+        return new
+
+    def save_session(self, cookie, user):
+        with self.lock:
+            atomic_json(self.directory / "session.json", {"cookie": cookie})
+            self.cookie, self.user = cookie, user
+
+    def update(self, values):
+        if not isinstance(values, dict) or set(values) - set(DEFAULTS):
+            raise UserError("设置包含未知字段")
+        new = self.validated(self.settings | values)
         with self.lock:
             atomic_json(self.directory / "settings.json", new)
-            self.settings = new
+            self.settings = dict(new)
         return dict(new)
 
 
@@ -113,9 +137,13 @@ class Netease:
                 # Parameters must travel in the query string: the Netease API
                 # service ignores JSON bodies and would otherwise answer every
                 # request from one shared cache entry (same URL, wrong song).
+                # Redirects stay off: the account cookie is an explicit header,
+                # and requests does not strip it when a redirect leaves the host.
                 response = session.post(self.store.settings["api_base"] + endpoint,
                                         params=dict(params or {}, timestamp=int(time.time() * 1000)),
-                                        headers=headers, timeout=(5, 35))
+                                        headers=headers, timeout=(5, 35), allow_redirects=False)
+                if response.is_redirect:
+                    raise UserError("音乐接口返回了重定向，已中止，以免把账号凭据转发到其它主机。请检查 API 地址是否正确。")
                 data = response.json()
             if not isinstance(data, dict):
                 raise UserError("音乐接口返回了无法识别的数据")
@@ -126,17 +154,25 @@ class Netease:
                 message = data.get("message") or data.get("msg") or "请求失败"
                 raise UserError(f"音乐接口：{str(message)[:200]}（{code}）")
             return data
+        except UserError:
+            raise
+        except ValueError as e:
+            # requests' JSONDecodeError subclasses both RequestException and
+            # ValueError, so this must come first to report the real problem.
+            raise UserError("API 地址返回了非 JSON 内容，请检查是否包含 /api/netease") from e
         except requests.RequestException as e:
             raise UserError("无法连接音乐接口。请打开 SPlayer，或启动独立 API 服务后检查设置。") from e
-        except ValueError as e:
-            raise UserError("API 地址返回了非 JSON 内容，请检查是否包含 /api/netease") from e
 
     def available(self):
         try:
             with requests.Session() as s:
                 s.trust_env = False
-                r = s.get(self.store.settings["api_base"] + "/login/status", timeout=(1, 3))
-                return r.ok and isinstance(r.json().get("data"), dict)
+                r = s.get(self.store.settings["api_base"] + "/login/status",
+                          timeout=(1, 3), allow_redirects=False)
+                if not r.ok:
+                    return False
+                body = r.json()
+                return isinstance(body, dict) and isinstance(body.get("data"), dict)
         except (requests.RequestException, ValueError):
             return False
 
@@ -165,12 +201,18 @@ class Netease:
         for offset in range(0, 100000, 100):
             data = self.call("/user/playlist", {"uid": user["userId"], "limit": 100, "offset": offset})
             page = data.get("playlist", [])
+            if not isinstance(page, list):
+                raise UserError("个人歌单接口返回了无法识别的数据")
             added = 0
             for item in page:
-                if item["id"] not in seen:
-                    seen.add(item["id"])
-                    result.append({k: item.get(k) for k in ("id", "name", "coverImgUrl", "trackCount", "creator")} | {"owned": item.get("userId", (item.get("creator") or {}).get("userId")) == user["userId"]})
-                    added += 1
+                song_id = item.get("id") if isinstance(item, dict) else None
+                if song_id is None or song_id in seen:
+                    continue
+                seen.add(song_id)
+                creator = item.get("creator") if isinstance(item.get("creator"), dict) else {}
+                result.append({k: item.get(k) for k in ("id", "name", "coverImgUrl", "trackCount", "creator")}
+                              | {"owned": item.get("userId", creator.get("userId")) == user["userId"]})
+                added += 1
             if not page or data.get("more") is False or (len(page) < 100 and not data.get("more")):
                 return result
             if not added:
@@ -179,28 +221,42 @@ class Netease:
 
     def playlist(self, playlist_id):
         raw = self.call("/playlist/detail", {"id": playlist_id, "s": 0}).get("playlist")
-        if not raw:
+        if not isinstance(raw, dict) or not raw:
             raise UserError("歌单不存在或当前账号无权访问")
-        ids = [int(t["id"]) for t in raw.get("trackIds", [])]
+        track_ids = raw.get("trackIds") if isinstance(raw.get("trackIds"), list) else []
+        ids = []
+        for entry in track_ids:
+            if isinstance(entry, dict) and str(entry.get("id", "")).isdigit():
+                ids.append(int(entry["id"]))
+            if len(ids) >= MAX_SONGS:
+                break
         songs = {}
         if ids:
             # Chunk ids so the query string stays well under common URL limits.
             for offset in range(0, len(ids), 100):
                 page = self.call("/song/detail", {"ids": ",".join(map(str, ids[offset:offset + 100]))})
-                for song in page.get("songs", []):
-                    songs[int(song["id"])] = normalize_song(song)
+                for song in page.get("songs") or []:
+                    if isinstance(song, dict) and str(song.get("id", "")).isdigit():
+                        songs[int(song["id"])] = normalize_song(song)
         else:
-            count = int(raw.get("trackCount", 0))
+            try:
+                count = min(int(raw.get("trackCount", 0)), MAX_SONGS)
+            except (TypeError, ValueError):
+                count = 0
             for offset in range(0, count, 500):
                 page = self.call("/playlist/track/all", {"id": playlist_id, "limit": 500, "offset": offset})
-                for song in page.get("songs", []):
-                    songs[int(song["id"])] = normalize_song(song)
+                for song in page.get("songs") or []:
+                    if isinstance(song, dict) and str(song.get("id", "")).isdigit():
+                        songs[int(song["id"])] = normalize_song(song)
             ids = list(songs)
         missing = [i for i in ids if i not in songs]
         warnings = []
         if missing:
             warnings.append(f"有 {len(missing)} 首歌曲详情不可用，可能已下架或没有访问权限。")
-        count = int(raw.get("trackCount", len(ids)))
+        try:
+            count = int(raw.get("trackCount", len(ids)))
+        except (TypeError, ValueError):
+            count = len(ids)
         if count > len(ids):
             warnings.append(f"歌单标记 {count} 首，但接口只返回 {len(ids)} 个歌曲编号。")
         return {"playlist": {k: raw.get(k) for k in ("id", "name", "coverImgUrl", "trackCount", "description")},
@@ -246,9 +302,15 @@ def normalize_song(song):
                 duration=int(song.get("dt") or song.get("duration") or 0))
 
 
+_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+
+
 def safe_name(value, limit=100):
-    name = re.sub(r'[\\/:*?"<>|\x00-\x1f\x7f]', "_", str(value)).strip(" .")
+    # Drop control characters plus Unicode bidi/format marks that could make a
+    # file name render differently from what it actually is.
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]', "_", str(value)).strip(" .")
     name = name[:limit].rstrip(" .") or "未命名"
-    if name.upper() in {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}:
+    # Windows maps "NUL.mp3" to the NUL device, so check the stem too.
+    if name.split(".")[0].upper() in _RESERVED:
         name = "_" + name
     return name

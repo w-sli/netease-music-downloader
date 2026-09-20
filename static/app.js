@@ -79,27 +79,45 @@ function toast(message, type) {
 
 async function api(path, options) {
   const opts = options || {};
-  const init = { method: opts.method || 'GET', headers: {}, credentials: 'same-origin' };
-  if (opts.body !== undefined) {
-    init.headers['Content-Type'] = 'application/json';
-    init.body = JSON.stringify(opts.body);
-  }
-  if (init.method !== 'GET') init.headers['X-CSRF-Token'] = state.csrf;
-  let response;
+  const send = async (retry) => {
+    const init = { method: opts.method || 'GET', headers: {}, credentials: 'same-origin' };
+    if (opts.body !== undefined) {
+      init.headers['Content-Type'] = 'application/json';
+      init.body = JSON.stringify(opts.body);
+    }
+    if (init.method !== 'GET') init.headers['X-CSRF-Token'] = state.csrf;
+    let response;
+    try {
+      response = await fetch('/api' + path, init);
+    } catch (error) {
+      throw new Error('无法连接本地服务，请确认服务仍在运行。');
+    }
+    // 服务重启会换掉令牌，此时自动取一次新令牌再重试，避免页面卡在 403
+    if (response.status === 403 && retry) {
+      await refreshCsrf();
+      return send(false);
+    }
+    let data = null;
+    try { data = await response.json(); } catch (error) { data = null; }
+    if (!response.ok) {
+      const message = data && data.error ? data.error : '请求未完成（' + response.status + '）';
+      const failure = new Error(message);
+      failure.status = response.status;
+      throw failure;
+    }
+    return data || {};
+  };
+  return send(true);
+}
+
+async function refreshCsrf() {
   try {
-    response = await fetch('/api' + path, init);
-  } catch (error) {
-    throw new Error('无法连接本地服务，请确认服务仍在运行。');
-  }
-  let data = null;
-  try { data = await response.json(); } catch (error) { data = null; }
-  if (!response.ok) {
-    const message = data && data.error ? data.error : '请求未完成（' + response.status + '）';
-    const failure = new Error(message);
-    failure.status = response.status;
-    throw failure;
-  }
-  return data || {};
+    const response = await fetch('/api/bootstrap', { credentials: 'same-origin' });
+    if (response.ok) {
+      const data = await response.json();
+      if (data && data.csrf) state.csrf = data.csrf;
+    }
+  } catch (error) { /* 仍失败则按原错误上报 */ }
 }
 
 function errorMessage(error) {
@@ -219,7 +237,8 @@ async function startQr() {
   try {
     const data = await api('/auth/qr', { method: 'POST', body: {} });
     if (frame) { frame.textContent = ''; const img = el('img'); img.src = data.image; img.alt = '登录二维码'; frame.appendChild(img); }
-    if (data.url) {
+    // 只接受 http(s) 链接，避免把接口返回的伪协议直接塞进 href
+    if (data.url && /^https?:\/\//i.test(data.url)) {
       const link = $('#qr-open-link');
       if (link) { link.href = data.url; show(link, true); }
     }
@@ -612,11 +631,20 @@ async function enqueue(songIds) {
 }
 
 /* ---------- 下载队列 ---------- */
+function setNavCount(summary) {
+  // 徽章表示“还有多少任务没结束”，下载中也算，否则下载时显示 0 会让人以为没事可做
+  const pending = (summary.queued || 0) + (summary.active || 0);
+  const badge = $('#nav-queue-count');
+  if (!badge) return;
+  badge.textContent = String(pending);
+  badge.hidden = pending === 0;
+}
+
 function renderQueue() {
   const snapshot = state.queue;
   if (!snapshot) return;
   const summary = snapshot.summary || {};
-  text($('#nav-queue-count'), summary.queued || 0);
+  setNavCount(summary);
   text($('#stat-total'), summary.total || 0);
   text($('#stat-active'), summary.active || 0);
   text($('#stat-completed'), (summary.completed || 0) + (summary.skipped || 0));
@@ -822,12 +850,23 @@ async function pollQueue(force) {
   try {
     const data = await api('/downloads');
     state.queue = data;
+    state.pollFailures = 0;
+    setInline('queue-error', '');   // 恢复后清掉断线期间留下的旧错误
     if (!$('#view-queue').hidden) renderQueue();
-    else {
-      text($('#nav-queue-count'), (data.summary || {}).queued || 0);
-    }
+    else setNavCount(data.summary || {});
   } catch (error) {
+    state.pollFailures = (state.pollFailures || 0) + 1;
     if (!force) setInline('queue-error', errorMessage(error));
+    // 连续失败说明本地服务已断开，别让界面继续显示重启前的旧进度
+    if (state.pollFailures >= 3 && state.queue) {
+      state.queue = null;
+      setNavCount({});
+      if (!$('#view-queue').hidden) {
+        text($('#queue-state'), '已断开');
+        text($('#queue-summary-text'), '本地服务已断开，恢复后会自动重新同步。');
+        text($('#queue-updated'), '数据已过期');
+      }
+    }
   } finally {
     state.polling = false;
   }

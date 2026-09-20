@@ -1,0 +1,72 @@
+name: 缺陷报告
+description: 报告一个可复现的缺陷
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请**不要**在这里粘贴账号 Cookie、手机号、uid 或任何真实歌单数据。
+        安全问题请不要用这个模板，改走 SECURITY.md 里的私密渠道。
+  - type: input
+    id: os
+    attributes:
+      label: 操作系统
+      placeholder: 例如 Ubuntu 24.04 / Windows 11 / macOS 15
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python 版本
+      description: 运行 `python -V` 的输出
+    validations:
+      required: true
+  - type: dropdown
+    id: api_source
+    attributes:
+      label: 接口服务来源
+      options:
+        - 独立服务（npx）
+        - 独立服务（Docker）
+        - SPlayer 内置服务
+        - 演示模式 --demo
+        - 其它
+    validations:
+      required: true
+  - type: input
+    id: api_base
+    attributes:
+      label: 接口地址
+      description: 设置页里填的地址，例如 http://127.0.0.1:25884/api/netease
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 报错文本或截图
+      description: 队列里任务的错误信息、终端输出等（请先去掉个人信息）
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 确认
+      options:
+        - label: 我确认没有在内容里包含 Cookie、手机号或其它凭据
+          required: true

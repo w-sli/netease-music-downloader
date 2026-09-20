@@ -10,6 +10,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import webbrowser
@@ -24,10 +25,27 @@ from core import Netease, QUALITIES, Store, UserError
 from downloader import DownloadManager
 
 
+def default_data_dir():
+    """Platform-appropriate folder for settings and the account cookie."""
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")
+        return Path(base) / "shiyin-downloader"
+    base = os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")
+    return Path(base) / "shiyin-downloader"
+
+
+def default_demo_dir():
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
+        return Path(base) / "shiyin-demo"
+    return Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")) / "shiyin-demo"
+
+
 def create_app(data_dir=None, demo=False, port=36523, api=None):
     app = Flask(__name__)
-    app.config.update(MAX_CONTENT_LENGTH=1024 * 1024, JSON_AS_ASCII=False)
-    store = Store(data_dir or Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "shiyin-downloader")
+    app.config.update(MAX_CONTENT_LENGTH=1024 * 1024)
+    app.json.ensure_ascii = False
+    store = Store(data_dir or default_data_dir())
     if demo:
         from demo import DemoAPI
         store.settings["download_dir"] = str(store.directory / "demo-downloads")
@@ -39,24 +57,38 @@ def create_app(data_dir=None, demo=False, port=36523, api=None):
     playlist_lock = threading.Lock()
     qr_keys = {}
     sms_times = {}
+    login_lock = threading.Lock()
     app.extensions.update(store=store, music_api=api, downloads=manager)
 
     @app.before_request
     def protect_local_app():
         if request.host.split(":")[0] not in {"127.0.0.1", "localhost"}:
             return jsonify(error="仅支持本机访问"), 403
+        # A browser attaches Sec-Fetch-Site to every request; refusing cross-site
+        # calls keeps other pages from driving this local service with the cookie.
+        if request.headers.get("Sec-Fetch-Site") == "cross-site":
+            return jsonify(error="不允许跨站访问"), 403
         origin = request.headers.get("Origin")
         if origin and origin != request.host_url.rstrip("/"):
             return jsonify(error="不允许跨站访问"), 403
         if request.method in {"POST", "PATCH", "DELETE", "PUT"}:
-            if not secrets.compare_digest(request.headers.get("X-CSRF-Token", ""), csrf):
+            # compare_digest rejects non-ASCII strings with a TypeError, so
+            # compare the raw bytes instead of letting the header crash the view.
+            provided = request.headers.get("X-CSRF-Token", "").encode("utf-8", "ignore")
+            if not secrets.compare_digest(provided, csrf.encode()):
                 return jsonify(error="页面会话已更新，请刷新页面后重试"), 403
 
     @app.after_request
     def response_headers(response):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data: https: http:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; img-src 'self' data: https://*.126.net http://*.126.net "
+            "https://*.music.126.net http://*.music.126.net http://127.0.0.1:*; "
+            "style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; "
+            "frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
         if request.path.startswith("/api"):
             response.headers["Cache-Control"] = "no-store"
         return response
@@ -69,7 +101,8 @@ def create_app(data_dir=None, demo=False, port=36523, api=None):
     def unexpected(error):
         if isinstance(error, HTTPException):
             return jsonify(error=error.description), error.code
-        app.logger.error("Request failed: %s", type(error).__name__)
+        # Log the type only: request bodies and headers may carry the account cookie.
+        app.logger.error("Request failed: %s: %s", type(error).__name__, error)
         return jsonify(error="操作未完成，请检查输入或重试。"), 500
 
     def body():
@@ -127,15 +160,20 @@ def create_app(data_dir=None, demo=False, port=36523, api=None):
         if not image.get("qrimg"):
             raise UserError("二维码生成失败，请刷新重试")
         now = time.monotonic()
-        for stale in [k for k, t in qr_keys.items() if now - t > 300]:
-            qr_keys.pop(stale, None)
-        qr_keys[key] = now
+        with login_lock:
+            for stale in [k for k, t in qr_keys.items() if now - t > 300]:
+                qr_keys.pop(stale, None)
+            qr_keys[key] = now
         return jsonify(key=key, image=image["qrimg"], url=image.get("qrurl", ""))
 
     @app.post("/api/auth/qr/check")
     def qr_check():
         key = body().get("key")
-        if key not in qr_keys or time.monotonic() - qr_keys[key] > 300:
+        if not isinstance(key, str) or not key:
+            return jsonify(code=800, message="二维码已过期，请刷新")
+        with login_lock:
+            created = qr_keys.get(key)
+        if created is None or time.monotonic() - created > 300:
             return jsonify(code=800, message="二维码已过期，请刷新")
         result = api.call("/login/qr/check", {"key": key}, cookie="", allow_codes=(800, 801, 802, 803))
         code = result.get("code")
@@ -143,7 +181,8 @@ def create_app(data_dir=None, demo=False, port=36523, api=None):
         response = dict(code=code, message=messages.get(code, "登录状态异常"))
         if code == 803:
             response["user"] = api.login(result.get("cookie", ""))
-            qr_keys.pop(key, None)
+            with login_lock:
+                qr_keys.pop(key, None)
             invalidate_playlists()
         return jsonify(response)
 
@@ -158,10 +197,14 @@ def create_app(data_dir=None, demo=False, port=36523, api=None):
     def sms_send():
         phone, country = phone_fields(body())
         key = (phone, country)
-        if time.monotonic() - sms_times.get(key, -1000) < 60:
-            raise UserError("验证码发送后请等待 60 秒")
+        now = time.monotonic()
+        with login_lock:
+            if now - sms_times.get(key, -1000) < 60:
+                raise UserError("验证码发送后请等待 60 秒")
+            sms_times[key] = now
+            for stale in [k for k, t in sms_times.items() if now - t > 3600]:
+                sms_times.pop(stale, None)
         api.call("/captcha/sent", {"phone": phone, "ctcode": country}, cookie="")
-        sms_times[key] = time.monotonic()
         return jsonify(ok=True)
 
     @app.post("/api/auth/sms/login")
@@ -211,6 +254,24 @@ def create_app(data_dir=None, demo=False, port=36523, api=None):
         manager.notify_settings()
         return jsonify(result)
 
+    def pick_with_tkinter():
+        """Last resort that also works on Windows; needs a desktop session."""
+        try:
+            import tkinter
+            from tkinter import filedialog
+        except ImportError:
+            return None
+        try:
+            root = tkinter.Tk()
+            root.withdraw()
+            try:
+                chosen = filedialog.askdirectory(title="选择音乐下载目录", mustexist=False)
+            finally:
+                root.destroy()
+            return chosen or ""
+        except Exception:
+            return None
+
     @app.post("/api/folder/pick")
     def folder_pick():
         if shutil.which("zenity"):
@@ -218,9 +279,14 @@ def create_app(data_dir=None, demo=False, port=36523, api=None):
         elif shutil.which("kdialog"):
             command = ["kdialog", "--getexistingdirectory", str(Path.home())]
         else:
-            raise UserError("未安装系统目录选择器，请直接填写目录的绝对路径")
+            # Windows has neither zenity nor kdialog.
+            chosen = pick_with_tkinter()
+            if chosen is None:
+                raise UserError("无法打开系统目录选择器，请直接填写目录的绝对路径")
+            return jsonify(cancelled=not chosen, path=chosen)
         try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(command, capture_output=True, text=True, timeout=300,
+                                    encoding="utf-8", errors="replace")
         except subprocess.TimeoutExpired as e:
             raise UserError("目录选择超时，请直接填写路径") from e
         if result.returncode or not result.stdout.strip():
@@ -297,9 +363,16 @@ def main():
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("port 必须在 1024–65535 之间")
+    # Windows consoles use a legacy code page when output is redirected, which
+    # would turn the startup banner into a UnicodeEncodeError.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     data_dir = args.data_dir
     if args.demo and data_dir is None:
-        data_dir = Path.home() / ".cache" / "shiyin-demo"
+        data_dir = default_demo_dir()
     app = create_app(data_dir, args.demo, args.port)
     try:
         server = make_server("127.0.0.1", args.port, app, threaded=True)
@@ -309,7 +382,9 @@ def main():
     address = f"http://127.0.0.1:{args.port}"
     print(f"拾音已启动：{address}" + ("（离线演示）" if args.demo else ""), flush=True)
     if not args.no_browser:
-        threading.Timer(.5, lambda: webbrowser.open(address)).start()
+        opener = threading.Timer(.5, lambda: webbrowser.open(address))
+        opener.daemon = True
+        opener.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

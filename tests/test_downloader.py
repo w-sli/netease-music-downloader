@@ -1,30 +1,35 @@
-"""Download queue naming, dedupe and skip behaviour, served from a local fixture."""
+"""Download queue naming, dedupe, skip and commit behaviour (local fixtures only)."""
 
 import hashlib
+import os
 import shutil
 import subprocess
 import tempfile
 import threading
 import time
 import unittest
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
 from core import Store
-from downloader import DownloadManager, audio_filename
+from downloader import DownloadManager, audio_filename, path_key
 
 
 class StubAPI:
     """Resolves every song to one local fixture file served over HTTP."""
 
-    def __init__(self, base_url, sample: Path, ext="mp3"):
+    def __init__(self, base_url, sample: Path, ext="mp3", delay=0.0, report_size=True):
         self.base_url, self.sample, self.ext = base_url, sample, ext
+        self.delay = delay
+        self.report_size = report_size
         self.payload = sample.read_bytes()
 
     def resolve(self, song_id, quality, fallback=False):
         return dict(url=f"{self.base_url}/{self.sample.name}", ext=self.ext,
-                    actual_quality="stub", size=len(self.payload),
-                    md5=hashlib.md5(self.payload).hexdigest())
+                    actual_quality="stub",
+                    size=len(self.payload) if self.report_size else 0,
+                    md5=hashlib.md5(self.payload).hexdigest() if self.report_size else None)
 
     def lyric(self, song_id):
         return {"lrc": {"lyric": "[00:00.000]第一行\n[00:02.000]第二行"},
@@ -63,8 +68,15 @@ class QueueNamingTests(unittest.TestCase):
         self.store.settings["download_dir"] = str(self.out)
         self.store.settings["playlist_folder"] = False
         self.store.settings["workers"] = 3
-        self.manager = DownloadManager(self.store, StubAPI(self.base_url, self.media / "sample.mp3"))
+        self.api = StubAPI(self.base_url, self.media / "sample.mp3")
+        self.manager = DownloadManager(self.store, self.api)
         self.addCleanup(self.manager.close)
+
+    def build_manager(self, api=None, workers=3):
+        self.store.settings["workers"] = workers
+        manager = DownloadManager(self.store, api or self.api)
+        self.addCleanup(manager.close)
+        return manager
 
     def run_queue(self, playlist, songs, timeout=60):
         self.manager.enqueue(playlist, songs)
@@ -180,6 +192,151 @@ class QueueNamingTests(unittest.TestCase):
         lyrics = str(audio.tags.get("USLT::und"))
         self.assertIn("第一行", lyrics)
         self.assertIn("first line", lyrics, "翻译应合并进内嵌歌词")
+
+    # ---------- 落盘原语：硬链接不可用 / 冲突 ----------
+    def test_falls_back_when_hard_links_are_unavailable(self):
+        """exFAT and some network shares have no hard links; copying must work."""
+        with mock.patch("os.link", side_effect=OSError(1, "hard links unsupported")):
+            snap = self.run_queue(self.playlist(), [song(1001)])
+        self.assertEqual(snap["jobs"][0]["status"], "completed")
+        self.assertEqual(self.audio_files(), ["同一首歌 - 同一位歌手.mp3"])
+        self.assertFalse(list(self.out.glob(".shiyin-*")), "临时文件应已清理")
+
+    def test_fallback_never_overwrites_an_existing_file(self):
+        self.out.mkdir(parents=True, exist_ok=True)
+        foreign = self.out / "同一首歌 - 同一位歌手.mp3"
+        foreign.write_bytes(b"user data")
+
+        def conflict(*args, **kwargs):
+            raise FileExistsError(17, "exists")
+
+        with mock.patch("os.link", side_effect=conflict):
+            snap = self.run_queue(self.playlist(), [song(1001)])
+        self.assertEqual(snap["jobs"][0]["status"], "skipped")
+        self.assertEqual(foreign.read_bytes(), b"user data")
+
+    def test_conflict_appearing_after_the_check_is_kept(self):
+        """A file created between the exists() check and the commit must win."""
+        original_commit = DownloadManager._commit
+
+        def racing_commit(temporary, target):
+            target.write_bytes(b"raced in")
+            return original_commit(temporary, target)
+
+        with mock.patch.object(DownloadManager, "_commit", staticmethod(racing_commit)):
+            snap = self.run_queue(self.playlist(), [song(1001)])
+        job = snap["jobs"][0]
+        self.assertEqual(job["status"], "skipped")
+        self.assertEqual((self.out / "同一首歌 - 同一位歌手.mp3").read_bytes(), b"raced in")
+        self.assertTrue(any("同名文件" in w for w in job["warnings"]), job["warnings"])
+
+    # ---------- 取消与重试 ----------
+    def test_cancel_then_retry_leaves_no_stale_owner(self):
+        """Regression: the old worker must not free the new worker's slot."""
+        slow = StubAPI(self.base_url, self.media / "sample.mp3", delay=0.02)
+        manager = self.build_manager(api=slow, workers=1)
+        manager.enqueue(self.playlist(), [song(1001)])
+        for _ in range(3):
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                snap = manager.snapshot()
+                if snap["summary"]["active"]:
+                    job_id = snap["jobs"][0]["id"]
+                    manager.action("cancel", job_id)
+                    manager.action("retry", job_id)
+                    break
+                time.sleep(0.02)
+            for _ in range(300):
+                if not manager.snapshot()["summary"]["active"]:
+                    break
+                time.sleep(0.02)
+        snap = manager.snapshot()
+        self.assertEqual(snap["summary"]["active"], 0)
+        self.assertEqual(manager.active, set(), "并发槽位不应泄漏")
+        self.assertEqual(manager.owners, {}, "所有权令牌不应残留")
+        self.assertFalse(list(self.out.glob(".shiyin-*")), "临时文件应已清理")
+
+    def test_leftover_temporary_files_are_swept_on_start(self):
+        self.out.mkdir(parents=True, exist_ok=True)
+        stale = self.out / ".shiyin-deadbeef.mp3"
+        stale.write_bytes(b"partial")
+        self.build_manager()
+        self.assertFalse(stale.exists(), "启动时应清理上次中断留下的临时文件")
+
+    # ---------- 大小写不敏感文件系统（NTFS/exFAT） ----------
+    def test_case_insensitive_collision_is_not_treated_as_foreign(self):
+        """On NTFS, "Song - A" and "song - a" are the same file."""
+        with mock.patch("os.path.normcase", side_effect=lambda value: str(value).lower()):
+            first = self.run_queue(self.playlist(), [song(1001, "Song", "Artist")])
+            self.assertEqual(first["jobs"][0]["status"], "completed")
+            second = self.run_queue(self.playlist(), [song(1001, "Song", "Artist")])
+            # Same song id: recognised as our own record, not as a foreign file.
+            self.assertIn(second["jobs"][0]["status"], {"skipped", "completed"})
+            self.assertFalse(
+                any("不是本工具的下载记录" in w for w in second["jobs"][0]["warnings"]),
+                second["jobs"][0]["warnings"])
+
+    def test_path_key_is_case_and_separator_insensitive(self):
+        with mock.patch("os.path.normcase", side_effect=lambda value: str(value).replace("\\", "/").lower()):
+            self.assertEqual(path_key("C:\\Music\\A.mp3"), path_key("c:/music/a.mp3"))
+
+
+class NoLengthHandler(BaseHTTPRequestHandler):
+    """Serves the fixture without Content-Length (HTTP/1.0 close-delimited)."""
+
+    payload = b""
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/mpeg")
+        self.end_headers()
+        self.wfile.write(type(self).payload)
+
+    def log_message(self, *args):
+        pass
+
+
+class NoContentLengthTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory(prefix="nolength-tests-")
+        cls.addClassCleanup(cls.temp.cleanup)
+        cls.root = Path(cls.temp.name)
+        NoLengthHandler.payload = b"ID3" + b"\x00" * 4096
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), NoLengthHandler)
+        cls.addClassCleanup(cls.server.server_close)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    def test_download_without_content_length_notes_unverified_integrity(self):
+        store = Store(self.root / "cfg")
+        store.settings["download_dir"] = str(self.root / "out")
+        store.settings["playlist_folder"] = False
+        store.settings["save_lrc"] = False
+        store.settings["embed_lyrics"] = False
+        store.settings["cover"] = False
+
+        class Api:
+            def resolve(self, song_id, quality, fallback=False):
+                return dict(url="http://127.0.0.1:%d/x.mp3" % self.server_port, ext="mp3",
+                            actual_quality="stub", size=0, md5=None)
+
+            def lyric(self, song_id):
+                return {}
+
+        api = Api()
+        api.server_port = self.server.server_address[1]
+        manager = DownloadManager(store, api)
+        self.addCleanup(manager.close)
+        manager.enqueue(dict(id=1, name="t"), [song(1001, "无名", "无姓")])
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            snap = manager.snapshot()
+            if not snap["summary"]["active"] and not snap["summary"]["queued"]:
+                break
+            time.sleep(0.05)
+        job = snap["jobs"][0]
+        self.assertEqual(job["status"], "completed")
+        self.assertTrue(any("无法校验完整性" in w for w in job["warnings"]), job["warnings"])
 
 
 if __name__ == "__main__":

@@ -8,6 +8,9 @@
 *.md text eol=lf
 *.json text eol=lf
 *.sh text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
 *.txt text eol=lf
 
 *.png binary

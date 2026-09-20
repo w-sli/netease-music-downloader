@@ -17,9 +17,22 @@ class DemoAPI:
         for ext, codec in [("mp3", "libmp3lame"), ("flac", "flac")]:
             path = self.folder / ("sample." + ext)
             if not path.exists():
-                subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=5", "-c:a", codec, str(path)], check=True)
+                self._make_sample(path, codec)
         self.user = dict(userId=10001, nickname="本地演示用户", avatarUrl="")
         self.store.user = self.user
+
+    @staticmethod
+    def _make_sample(path, codec):
+        """演示模式需要一小段测试音频；ffmpeg 缺失时给出可读的提示。"""
+        try:
+            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                            "sine=frequency=440:duration=5", "-c:a", codec, str(path)],
+                           check=True, capture_output=True)
+        except FileNotFoundError as e:
+            raise UserError("演示模式需要 ffmpeg 生成测试音频，请先安装 ffmpeg 后重试。") from e
+        except subprocess.CalledProcessError as e:
+            detail = (e.stderr or b"").decode("utf-8", "replace").strip()[:200]
+            raise UserError(f"生成演示音频失败：{detail or 'ffmpeg 执行出错'}") from e
 
     def available(self):
         return True

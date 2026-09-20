@@ -1,0 +1,21 @@
+name: 功能建议
+description: 提出一个改进想法
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题
+      description: 先说场景，再说方案，比只给方案更容易讨论
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你希望的方案
+    validations:
+      required: false
+  - type: markdown
+    attributes:
+      value: |
+        请注意：本项目只使用官方接口，不会接受涉及破解音质、绕过版权保护或第三方音源解锁的建议。

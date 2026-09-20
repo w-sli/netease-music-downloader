@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全问题（请勿公开）
+    url: https://github.com/w-sli/netease-music-downloader/security/advisories/new
+    about: 漏洞请在 Security 里私密报告，不要开公开 Issue。
+  - name: 接口连不上 / 只拿到试听片段
+    url: https://github.com/w-sli/netease-music-downloader/blob/main/README.md#常见问题
+    about: 常见问题在 README 的“常见问题”一节已有说明，先看一眼能省一轮往返。
