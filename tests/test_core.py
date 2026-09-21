@@ -1,13 +1,18 @@
-"""Settings validation, file-name hardening and API client behaviour."""
+"""Settings validation, file-name hardening, cookie import and API client behaviour."""
 
 import json
+import os
+import sqlite3
 import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from unittest import mock
 
-from core import DEFAULTS, Store, UserError, safe_name, Netease
+import core
+from core import (DEFAULTS, Netease, Store, UserError, read_splayer_cookie,
+                  safe_name, splayer_data_dirs)
 
 
 class SafeNameTests(unittest.TestCase):
@@ -186,6 +191,82 @@ class PlaylistParsingTests(unittest.TestCase):
         })
         result = api.playlists()
         self.assertEqual([p["id"] for p in result], [1])
+
+
+class SplayerCookieTests(unittest.TestCase):
+    """SPlayer 的登录态读取：只用合成数据库，绝不碰真实凭据。"""
+
+    SCHEMA = ("CREATE TABLE cookies(creation_utc INTEGER NOT NULL,host_key TEXT NOT NULL,"
+              "top_frame_site_key TEXT NOT NULL,name TEXT NOT NULL,value TEXT NOT NULL,"
+              "encrypted_value BLOB NOT NULL,path TEXT NOT NULL,expires_utc INTEGER NOT NULL,"
+              "is_secure INTEGER NOT NULL,is_httponly INTEGER NOT NULL,last_access_utc INTEGER NOT NULL,"
+              "has_expires INTEGER NOT NULL,is_persistent INTEGER NOT NULL,priority INTEGER NOT NULL)")
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="splayer-tests-")
+        self.addCleanup(self.temp.cleanup)
+        self.profile = Path(self.temp.name) / "SPlayer"
+        self.profile.mkdir()
+
+    def write_db(self, rows, name="Cookies"):
+        connection = sqlite3.connect(self.profile / name)
+        connection.execute(self.SCHEMA)
+        for cookie_name, value in rows:
+            connection.execute(
+                "insert into cookies values (0,'localhost','',?,?,x'',  '/',0,0,0,0,0,0,1)",
+                (cookie_name, value))
+        connection.commit()
+        connection.close()
+
+    def test_reads_a_plaintext_session(self):
+        self.write_db([("MUSIC_U", "abc123"), ("__csrf", "csrf1"), ("NMTID", "nmtid1")])
+        cookie = read_splayer_cookie([self.profile])
+        self.assertIn("MUSIC_U=abc123", cookie)
+        self.assertIn("__csrf=csrf1", cookie)
+        self.assertIn("NMTID=nmtid1", cookie)
+
+    def test_ignores_the_artefact_entries(self):
+        """SPlayer's jar also holds entries literally named Path/Expires/Max-Age."""
+        self.write_db([("MUSIC_U", "abc123"), ("Path", "/"), ("Expires", "Sat, 01 Jan 2000"),
+                       ("Max-Age", "0"), ("SomeOther", "x")])
+        cookie = read_splayer_cookie([self.profile])
+        self.assertEqual(cookie, "MUSIC_U=abc123")
+
+    def test_without_music_u_there_is_no_session(self):
+        self.write_db([("__csrf", "csrf1")])
+        self.assertEqual(read_splayer_cookie([self.profile]), "")
+
+    def test_encrypted_values_are_not_treated_as_a_session(self):
+        """On platforms where Chromium encrypts values, fail instead of guessing."""
+        self.write_db([("MUSIC_U", "v10garbageciphertext")])
+        self.assertEqual(read_splayer_cookie([self.profile]), "")
+
+    def test_missing_profile_or_corrupt_db_returns_empty(self):
+        self.assertEqual(read_splayer_cookie([self.profile / "nope"]), "")
+        (self.profile / "Cookies").write_bytes(b"not a database")
+        self.assertEqual(read_splayer_cookie([self.profile]), "")
+
+    def test_empty_values_are_skipped(self):
+        self.write_db([("MUSIC_U", "abc"), ("__csrf", "   ")])
+        self.assertEqual(read_splayer_cookie([self.profile]), "MUSIC_U=abc")
+
+    def test_early_directories_are_tried_first(self):
+        other = Path(self.temp.name) / "empty-profile"
+        other.mkdir()
+        self.write_db([("MUSIC_U", "abc")])
+        self.assertEqual(read_splayer_cookie([other, self.profile]), "MUSIC_U=abc")
+
+    def test_profile_location_follows_the_platform(self):
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": self.temp.name}):
+            self.assertEqual(splayer_data_dirs()[0], Path(self.temp.name) / "SPlayer")
+        # 模拟 Windows 分支时把 Path 换成纯路径类型，否则 Linux 上造不出 WindowsPath
+        with mock.patch.object(core.os, "name", "nt"), \
+             mock.patch.object(core, "Path", PurePosixPath), \
+             mock.patch.dict(os.environ, {"APPDATA": self.temp.name}):
+            self.assertEqual(splayer_data_dirs()[0], PurePosixPath(self.temp.name) / "SPlayer")
+        with mock.patch.object(core.sys, "platform", "darwin"), \
+             mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": self.temp.name}):
+            self.assertIn("Application Support", str(splayer_data_dirs()[0]))
 
 
 if __name__ == "__main__":

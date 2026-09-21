@@ -328,8 +328,26 @@ async function smsLogin(event) {
   }
 }
 
-async function cookieLogin(event) {
+async function loginFromSplayer() {
+  // 有意保持安静：读不到就什么都不说，只有成功时才提示
+  const button = $('#login-from-splayer');
+  setBusy(button, true);
+  try {
+    const data = await api('/auth/from-splayer', { method: 'POST', body: {} });
+    state.user = data.user;
+    renderUser();
+    closeDialog('auth-dialog');
+    toast('已读取 SPlayer 的登录状态');
+    await loadPlaylists();
+  } catch (error) {
+    /* 失败不提示：这不是一个需要用户处理的操作 */
+  } finally {
+    setBusy(button, false);
+  }
+}
+
   event.preventDefault();
+async function cookieLogin(event) {
   const button = $('#cookie-login-button');
   const input = $('#cookie-input');
   setInline('auth-error', '');
@@ -1141,6 +1159,7 @@ function bind() {
   $('#send-sms').addEventListener('click', sendSms);
   $('#auth-sms').addEventListener('submit', smsLogin);
   $('#auth-cookie').addEventListener('submit', cookieLogin);
+  $('#login-from-splayer').addEventListener('click', loginFromSplayer);
   $('#verify-session').addEventListener('click', verifySession);
   $('#logout-button').addEventListener('click', logout);
   $('#reconnect-button').addEventListener('click', async () => { show($('#global-error'), false); await checkApi(); await pollQueue(true); });
@@ -1203,4 +1222,9 @@ async function boot() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', boot);
+// 页面可能已从缓存或 BFCache 恢复，此时 DOMContentLoaded 已经错过，必须直接启动
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  boot();
+}

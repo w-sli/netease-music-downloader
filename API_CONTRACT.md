@@ -36,6 +36,7 @@
 | `POST /api/auth/sms/login` | `{phone,countrycode,captcha}` | `{user}` |
 | `POST /api/auth/cookie` | `{cookie}` | `{user}`，Cookie 由用户自行从浏览器复制 |
 | `POST /api/auth/logout` | — | `{ok:true}` |
+| `POST /api/auth/from-splayer` | — | `{user}`；读取 SPlayer 配置目录里已有的登录态（只读、只取会话所需字段，读不到则返回错误） |
 
 Cookie 只保存在数据目录的 `session.json`（权限 600），不下发到浏览器存储，
 也不会出现在任何接口响应里。

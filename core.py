@@ -4,6 +4,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import sqlite3
+import sys
 import tempfile
 import threading
 import time
@@ -322,6 +325,63 @@ def normalize_song(song):
 
 
 _RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+
+
+def splayer_data_dirs():
+    """Where SPlayer keeps its Chromium profile, most likely first."""
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")
+        return [Path(base) / "SPlayer"]
+    if sys.platform == "darwin":
+        return [Path.home() / "Library" / "Application Support" / "SPlayer"]
+    base = os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")
+    return [Path(base) / "SPlayer"]
+
+
+# Only the names the NetEase session actually needs: the cookie jar in SPlayer's
+# profile also holds entries literally named "Path"/"Expires" (a parsing artefact
+# of how it stored its own Set-Cookie headers), which must not be forwarded.
+_SESSION_COOKIE_NAMES = ("MUSIC_U", "MUSIC_A_T", "MUSIC_R_T", "MUSIC_R_U", "NMTID", "__csrf", "__remember_me")
+
+
+def read_splayer_cookie(dirs=None):
+    """Read the account cookie SPlayer already holds for its own local API.
+
+    SPlayer's Electron renderer stores it in the profile's Chromium cookie
+    database. On Linux the values are plaintext (no keyring involved); on
+    platforms where Chromium encrypts them the extracted string simply fails the
+    caller's validation, so this never yields a bogus session. Returns "" when
+    the profile is missing, unreadable, locked, or holds no NetEase session.
+    """
+    for directory in (dirs if dirs is not None else splayer_data_dirs()):
+        database = Path(directory) / "Cookies"
+        if not database.is_file():
+            continue
+        copy = None
+        try:
+            # Work on a copy: the profile's DB is locked while SPlayer runs, and a
+            # read-only open can still fail on a -wal/-journal in flight.
+            fd, copy = tempfile.mkstemp(prefix="splayer-cookies-", suffix=".db")
+            os.close(fd)
+            shutil.copyfile(database, copy)
+            connection = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+            try:
+                rows = connection.execute(
+                    "select name, value from cookies where value <> ''").fetchall()
+            finally:
+                connection.close()
+        except (OSError, sqlite3.Error):
+            continue
+        finally:
+            if copy:
+                Path(copy).unlink(missing_ok=True)
+        found = {name: value for name, value in rows
+                 if name in _SESSION_COOKIE_NAMES
+                 and str(value).strip()
+                 and not str(value).strip().startswith("v1")}
+        if found.get("MUSIC_U"):
+            return "; ".join(f"{name}={found[name]}" for name in _SESSION_COOKIE_NAMES if name in found)
+    return ""
 
 
 def safe_name(value, limit=100):

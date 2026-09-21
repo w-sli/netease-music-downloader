@@ -71,6 +71,22 @@ templates/index.html 单页模板（图标为内联 SVG，无外部依赖）
 | `settings.json` 载入时**也走同一套校验** | 手改文件不能绕过约束 | api_base 可能被改成远程地址 |
 | 全局异常只记录类型与消息，不记堆栈 | 请求头/请求体可能含账号 Cookie | 日志泄漏凭据 |
 
+### 4.1 从 SPlayer 读取登录态（`core.read_splayer_cookie`）
+
+「从 SPlayer 读取登录状态」这个入口读的是 SPlayer 自己 Electron 配置目录里的 Chromium
+cookie 库（`<profile>/Cookies`，SQLite）。实现要点：
+
+- 只读，且先复制到临时文件再打开：SPlayer 运行时数据库是加锁的，直接开会失败。
+- 只取 `_SESSION_COOKIE_NAMES` 白名单里的字段。SPlayer 的 cookie 库里还混着名字就叫
+  `Path`/`Expires`/`Max-Age` 的条目（它当年解析自己 Set-Cookie 头留下的），这些绝不能转发。
+- 没有 `MUSIC_U` 就当没有会话，返回空串；值以 `v1` 开头（Chromium 加密后的形态）也直接放弃——
+  **读不出来就当作没登录，绝不猜**。拿到的串仍要过一遍接口校验，所以不会产生假会话。
+- 平台差异：Linux 上实测这些值是**明文**（`encrypted_value` 为空）；Windows/macOS 上 Chromium 会用
+  DPAPI/Keychain 加密，此时该功能会静默失效（前端刻意不提示失败，只有成功才提示）。
+  要支持那两个平台需要引入解密依赖，目前没做。
+
+前端只在成功时提示一次（`loginFromSplayer()` 的 catch 是空的），因为它不是一个需要用户处理的操作。
+
 ## 5. 数据格式
 
 ### 5.1 数据目录

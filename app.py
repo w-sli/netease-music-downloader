@@ -21,7 +21,7 @@ from flask import Flask, Response, jsonify, render_template, request, send_file
 from werkzeug.exceptions import HTTPException
 from werkzeug.serving import make_server
 
-from core import Netease, QUALITIES, Store, UserError
+from core import Netease, QUALITIES, Store, UserError, read_splayer_cookie
 from downloader import DownloadManager
 
 
@@ -222,6 +222,16 @@ def create_app(data_dir=None, demo=False, port=36523, api=None):
     @app.post("/api/auth/cookie")
     def cookie_login():
         user = api.login(body().get("cookie", ""))
+        invalidate_playlists()
+        return jsonify(user=user)
+
+    @app.post("/api/auth/from-splayer")
+    def login_from_splayer():
+        """Reuse the session SPlayer already holds, so a second scan is not needed."""
+        cookie = read_splayer_cookie()
+        if not cookie:
+            raise UserError("没有在 SPlayer 的配置目录里找到可用的登录状态")
+        user = api.login(cookie)
         invalidate_playlists()
         return jsonify(user=user)
 
