@@ -25,7 +25,7 @@ DEFAULTS = dict(api_base="http://127.0.0.1:25884/api/netease",
                 download_dir=str(Path.home() / "Music" / "拾音"),
                 quality="exhigh", workers=4, retries=2, translation=True,
                 romanization=False, save_lrc=True, embed_lyrics=True, cover=True,
-                playlist_folder=True, playback_fallback=False)
+                playlist_folder=True, playback_fallback=False, splayer_login=True)
 # Hard ceiling so a malformed or hostile API response cannot drive an endless loop.
 MAX_SONGS = 20000
 

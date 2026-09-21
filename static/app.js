@@ -61,20 +61,29 @@ function setBusy(button, busy, label) {
 function show(node, visible) { if (node) node.hidden = !visible; }
 function text(node, value) { if (node) node.textContent = value === undefined || value === null ? '' : String(value); }
 
-function toast(message, type) {
+function toast(message, type, action) {
   const stack = $('#toasts');
   if (!stack) return;
   const box = el('div', 'toast' + (type === 'error' ? ' toast-error' : ''));
   box.setAttribute('role', type === 'error' ? 'alert' : 'status');
   box.appendChild(icon(type === 'error' ? 'info' : 'check'));
   box.appendChild(el('span', null, message));
+  let timer = null;
+  const dismiss = () => { clearTimeout(timer); box.remove(); };
+  if (action) {
+    // 带操作的提示要留够时间给用户点（默认 5 秒太短）
+    const button = el('button', 'text-button toast-action', action.label);
+    button.type = 'button';
+    button.addEventListener('click', () => { dismiss(); action.onClick(); });
+    box.appendChild(button);
+  }
   const close = el('button', 'icon-button');
   close.setAttribute('aria-label', '关闭提示');
   close.appendChild(icon('close'));
-  close.addEventListener('click', () => box.remove());
+  close.addEventListener('click', dismiss);
   box.appendChild(close);
   stack.appendChild(box);
-  setTimeout(() => box.remove(), type === 'error' ? 9000 : 5000);
+  timer = setTimeout(dismiss, action ? 15000 : (type === 'error' ? 9000 : 5000));
 }
 
 async function api(path, options) {
@@ -331,19 +340,46 @@ async function smsLogin(event) {
 async function loginFromSplayer() {
   // 有意保持安静：读不到就什么都不说，只有成功时才提示
   const button = $('#login-from-splayer');
+  if (!state.settings || !state.settings.splayer_login) return;
   setBusy(button, true);
   try {
     const data = await api('/auth/from-splayer', { method: 'POST', body: {} });
     state.user = data.user;
     renderUser();
     closeDialog('auth-dialog');
-    toast('已读取 SPlayer 的登录状态');
+    toast('已读取 SPlayer 的登录状态', 'ok', data.can_undo ? {
+      label: '撤回',
+      onClick: undoImport,
+    } : null);
     await loadPlaylists();
   } catch (error) {
     /* 失败不提示：这不是一个需要用户处理的操作 */
   } finally {
     setBusy(button, false);
   }
+}
+
+async function undoImport() {
+  try {
+    const data = await api('/auth/from-splayer/undo', { method: 'POST', body: {} });
+    state.user = data.user || null;
+    renderUser();
+    state.playlists = [];
+    state.current = null;
+    renderPlaylists();
+    show($('#playlist-detail'), false);
+    show($('#library-overview'), true);
+    toast(data.user ? '已撤回，恢复为 ' + (data.user.nickname || '上一个账号') : '已撤回，恢复到之前的未登录状态');
+    if (state.user) await loadPlaylists();
+  } catch (error) {
+    toast(errorMessage(error), 'error');
+  }
+}
+
+/** 设置里关掉「从 SPlayer 读取登录状态」时，把入口一并隐藏。 */
+function syncSplayerEntry() {
+  const button = $('#login-from-splayer');
+  if (button) button.hidden = !(state.settings && state.settings.splayer_login);
 }
 
   event.preventDefault();
@@ -944,7 +980,10 @@ function fillSettingsForm(settings) {
   set('setting-cover', settings.cover);
   set('setting-api-base', settings.api_base);
   set('setting-playback-fallback', settings.playback_fallback);
+  set('setting-splayer-login', settings.splayer_login);
   syncSettingEchoes(settings.workers, settings.quality);
+  state.settings = settings;
+  syncSplayerEntry();
   state.dirty = false;
   show($('#settings-dirty'), false);
   text($('#settings-save-status'), '已读取当前设置');
@@ -987,6 +1026,7 @@ function collectSettings() {
     cover: read('setting-cover').checked,
     api_base: read('setting-api-base').value.trim(),
     playback_fallback: read('setting-playback-fallback').checked,
+    splayer_login: read('setting-splayer-login').checked,
   };
 }
 
@@ -1211,6 +1251,7 @@ async function boot() {
     state.apiAvailable = !!data.api_available;
     renderUser();
     syncSettingEchoes(state.settings.workers, state.settings.quality);
+    syncSplayerEntry();
     show($('#global-error'), !state.apiAvailable);
     if (!state.apiAvailable) text($('#global-error-text'), '未连接到音乐接口。请打开 SPlayer，或在设置中填写独立的 API 服务地址。');
     await checkApi();

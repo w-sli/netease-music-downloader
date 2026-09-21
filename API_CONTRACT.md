@@ -36,6 +36,7 @@
 | `POST /api/auth/sms/login` | `{phone,countrycode,captcha}` | `{user}` |
 | `POST /api/auth/cookie` | `{cookie}` | `{user}`，Cookie 由用户自行从浏览器复制 |
 | `POST /api/auth/logout` | — | `{ok:true}` |
+| `POST /api/auth/from-splayer/undo` | — | `{user}`；把会话还原成读取 SPlayer 之前的样子（原来未登录就还原为未登录）。单次有效，之后其它登录动作会作废该还原点 |
 | `POST /api/auth/from-splayer` | — | `{user}`；读取 SPlayer 配置目录里已有的登录态（只读、只取会话所需字段，读不到则返回错误） |
 
 Cookie 只保存在数据目录的 `session.json`（权限 600），不下发到浏览器存储，
@@ -63,7 +64,7 @@ Cookie 只保存在数据目录的 `session.json`（权限 600），不下发到
 
 settings 字段：`api_base`、`download_dir`、`quality`、`workers`(1–12)、`retries`(0–5)、
 `translation`、`romanization`、`save_lrc`、`embed_lyrics`、`cover`、`playlist_folder`、
-`playback_fallback`。`quality` 取值：`standard`、`higher`、`exhigh`、`lossless`、`hires`、
+`playback_fallback`、`splayer_login`。`quality` 取值：`standard`、`higher`、`exhigh`、`lossless`、`hires`、
 `jyeffect`、`sky`、`dolby`、`jymaster`（默认 `exhigh`，默认 4 并发）。
 
 `PATCH` 的校验规则集中在 `core.Store.validated()`：未知字段、类型错误、越界数值、

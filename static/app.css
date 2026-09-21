@@ -330,6 +330,7 @@ input.switch:checked::after { transform: translateX(15px); }
 .toast > span { flex: 1; }
 .toast .icon { width: 17px; height: 17px; }
 .toast .icon-button { width: 25px; min-width: 25px; height: 25px; }
+.toast-action { flex-shrink: 0; padding: 2px 6px; font-size: 11px; text-decoration: underline; text-underline-offset: 3px; }
 .toast-error { color: var(--danger); border-color: #edcdbd; background: #fff8f2; }
 .spinner { display: inline-block; width: 15px; height: 15px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
 .is-loading { cursor: wait !important; }

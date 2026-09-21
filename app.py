@@ -57,6 +57,7 @@ def create_app(data_dir=None, demo=False, port=36523, api=None):
     playlist_lock = threading.Lock()
     qr_keys = {}
     sms_times = {}
+    import_undo = {"state": None}
     login_lock = threading.Lock()
     app.extensions.update(store=store, music_api=api, downloads=manager)
 
@@ -123,6 +124,10 @@ def create_app(data_dir=None, demo=False, port=36523, api=None):
             playlist_cache[pid] = (time.monotonic(), data)
         return data
 
+    def clear_import_undo():
+        with login_lock:
+            import_undo["state"] = None
+
     def invalidate_playlists():
         with playlist_lock:
             playlist_cache.clear()
@@ -183,6 +188,7 @@ def create_app(data_dir=None, demo=False, port=36523, api=None):
             response["user"] = api.login(result.get("cookie", ""))
             with login_lock:
                 qr_keys.pop(key, None)
+            clear_import_undo()
             invalidate_playlists()
         return jsonify(response)
 
@@ -216,28 +222,48 @@ def create_app(data_dir=None, demo=False, port=36523, api=None):
             raise UserError("请输入有效验证码")
         result = api.call("/login/cellphone", {"phone": phone, "countrycode": country, "captcha": captcha}, cookie="")
         user = api.login(result.get("cookie", ""))
+        clear_import_undo()
         invalidate_playlists()
         return jsonify(user=user)
 
     @app.post("/api/auth/cookie")
     def cookie_login():
         user = api.login(body().get("cookie", ""))
+        clear_import_undo()
         invalidate_playlists()
         return jsonify(user=user)
 
     @app.post("/api/auth/from-splayer")
     def login_from_splayer():
         """Reuse the session SPlayer already holds, so a second scan is not needed."""
+        if not store.settings["splayer_login"]:
+            raise UserError("已在设置里关闭「从 SPlayer 读取登录状态」")
         cookie = read_splayer_cookie()
         if not cookie:
             raise UserError("没有在 SPlayer 的配置目录里找到可用的登录状态")
+        with login_lock:
+            # 记下读取之前的状态，供「撤回」还原（含原来未登录的情况）
+            import_undo["state"] = {"cookie": store.cookie, "user": store.user}
         user = api.login(cookie)
         invalidate_playlists()
-        return jsonify(user=user)
+        return jsonify(user=user, can_undo=True)
+
+    @app.post("/api/auth/from-splayer/undo")
+    def undo_splayer_login():
+        """Restore the session that was in place before the SPlayer import."""
+        with login_lock:
+            previous = import_undo.get("state")
+            import_undo["state"] = None
+        if previous is None:
+            raise UserError("没有可撤回的登录状态")
+        store.save_session(previous["cookie"], previous["user"])
+        invalidate_playlists()
+        return jsonify(user=previous["user"] or None)
 
     @app.post("/api/auth/logout")
     def logout():
         store.save_session("", None)
+        clear_import_undo()
         invalidate_playlists()
         return jsonify(ok=True)
 
