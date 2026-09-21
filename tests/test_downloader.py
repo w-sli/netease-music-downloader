@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from core import Store
-from downloader import DownloadManager, audio_filename, path_key
+from downloader import DownloadManager, audio_filename, cover_url, path_key
 
 
 class StubAPI:
@@ -279,6 +279,17 @@ class QueueNamingTests(unittest.TestCase):
     def test_path_key_is_case_and_separator_insensitive(self):
         with mock.patch("os.path.normcase", side_effect=lambda value: str(value).replace("\\", "/").lower()):
             self.assertEqual(path_key("C:\\Music\\A.mp3"), path_key("c:/music/a.mp3"))
+
+    # ---------- 封面尺寸 ----------
+    def test_cover_url_asks_the_cdn_for_a_resized_image(self):
+        """A bare picUrl can serve a multi-megabyte original, bloating every file."""
+        self.assertEqual(cover_url("https://p1.music.126.net/abc.jpg"),
+                         "https://p1.music.126.net/abc.jpg?param=1024y1024")
+        # 已有查询串时必须用 & 追加
+        self.assertEqual(cover_url("https://p1.music.126.net/abc.jpg?x=1"),
+                         "https://p1.music.126.net/abc.jpg?x=1&param=1024y1024")
+        self.assertEqual(cover_url(""), "")
+        self.assertIn("param=512y512", cover_url("https://p1.music.126.net/a.jpg", size=512))
 
     # ---------- 单曲下载（不依赖歌单） ----------
     def test_single_song_lands_in_the_download_root(self):

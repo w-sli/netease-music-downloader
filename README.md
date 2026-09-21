@@ -163,7 +163,7 @@ python3 -m venv .venv
 
 ![歌单详情](docs/screenshot-playlist.png)
 
-下载队列（8 个任务、4 个并发进行中、总体 50%；截图为演示模式的 40 KB 测试音频，
+下载队列（16 个任务、4 个并发进行中、8 个已完成、总体 50%；截图为演示模式的 40 KB 测试音频，
 真实歌曲会显示渐变进度与实时速度）：
 
 ![下载队列](docs/screenshot-queue.png)

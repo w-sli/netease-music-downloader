@@ -21,6 +21,7 @@ FINISHED = {"completed", "skipped", "cancelled"}
 # A name that has been produced or is about to be produced by some song.
 CLAIMED = ACTIVE | {"queued", "completed", "skipped"}
 MAX_JOBS = 5000
+MAX_COVER_BYTES = 8 * 1024 * 1024
 
 
 def path_key(value):
@@ -45,6 +46,19 @@ def is_file(value):
         return Path(value).is_file()
     except OSError:
         return False
+
+
+def cover_url(url, size=1024):
+    """Ask NetEase's image CDN for a bounded cover.
+
+    The bare `picUrl` can serve the original upload — for some tracks that is a
+    PNG several megabytes large, which then bloats every downloaded file. The
+    `param=WxH` convention (also used by SPlayer) returns a reasonable JPEG.
+    """
+    if not url:
+        return ""
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}param={size}y{size}"
 
 
 def job_folder(settings, playlist_name, playlist_id):
@@ -342,13 +356,16 @@ class DownloadManager:
             cover = None
             if settings["cover"] and song.get("cover"):
                 try:
-                    with requests.get(song["cover"], timeout=(5, 12), stream=True, allow_redirects=True) as r:
+                    # Ask the CDN for a resized cover: the raw URL can be the
+                    # original upload, which for some tracks is a multi-megabyte PNG.
+                    with requests.get(cover_url(song["cover"]), timeout=(5, 12), stream=True,
+                                      allow_redirects=True) as r:
                         r.raise_for_status()
                         chunks = bytearray()
                         for chunk in r.iter_content(65536):
                             self._check(event)
                             chunks.extend(chunk)
-                            if len(chunks) > 8 * 1024 * 1024:
+                            if len(chunks) > MAX_COVER_BYTES:
                                 raise UserError("封面超过 8 MB")
                         cover = bytes(chunks)
                 except Cancelled:

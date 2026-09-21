@@ -51,11 +51,6 @@ svg.icon { width: 20px; height: 20px; display: inline-block; flex: 0 0 auto; fil
 .nav-count { font-size: 10px; border-radius: 6px; padding: 1px 7px; background: #dce2d6; margin-left: auto; font-variant-numeric: tabular-nums; }
 .nav-item.active .nav-count { background: #cbdac3; }
 .sidebar-bottom { margin-top: auto; padding-top: 35px; }
-.thread-card { width: 100%; text-align: left; padding: 18px 14px; background: #e6e9dd; border: 1px solid #dce2d3; border-radius: 13px; }
-.thread-symbol { display: block; color: #6b8661; margin-bottom: 9px; }
-.thread-card strong { display: block; font-weight: 550; font-size: 12px; }
-.thread-card > span:last-child { display: flex; align-items: center; gap: 3px; font-size: 11px; color: #7a8773; margin-top: 5px; }
-.thread-card > span:last-child .icon { margin-left: auto; width: 14px; height: 14px; }
 .local-label { display: flex; justify-content: center; align-items: center; gap: 7px; color: #6f7c69; font-size: 11px; padding-top: 27px; }
 .sidebar-footer { text-align: center; font-size: 10px; color: #989e92; margin-top: 8px; }
 .app-shell { margin-left: 232px; }
@@ -372,10 +367,7 @@ input.switch:checked::after { transform: translateX(15px); }
   .brand small { font-size: 7px; letter-spacing: 1.5px; }
   .sidebar-caption { font-size: 10px; padding-left: 6px; letter-spacing: .5px; }
   .nav-item { padding: 0 11px; gap: 10px; font-size: 12px; }
-  .thread-card { padding: 14px 10px; }
-  .thread-card strong { font-size: 10px; }
-  .thread-card > span:last-child { font-size: 10px; }
-  .app-shell { margin-left: 174px; }
+        .app-shell { margin-left: 174px; }
   .topbar { padding: 0 22px; height: 76px; }
   .topbar-actions { gap: 13px; }
   main { padding: 27px 22px 0; }
