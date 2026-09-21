@@ -29,7 +29,6 @@ body:
         - 独立服务（npx）
         - 独立服务（Docker）
         - SPlayer 内置服务
-        - 演示模式 --demo
         - 其它
     validations:
       required: true

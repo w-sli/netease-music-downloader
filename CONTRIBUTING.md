@@ -12,7 +12,7 @@
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
 python -m pytest tests/ -q          # 需要系统安装 ffmpeg
-python app.py --demo                # 离线演示，用来手动验证界面
+python app.py                       # 启动界面，手动验证改动
 ```
 
 测试**不允许访问外网**：音频样本用 ffmpeg 现场生成，下载行为用 `127.0.0.1` 上的本地
@@ -23,7 +23,7 @@ HTTP 夹具模拟。任何需要联网才能通过的测试都会被拒收——
 ## 提交改动前
 
 1. `python -m pytest tests/ -q` 全部通过。
-2. 手动跑一次 `python app.py --demo`，确认受影响的界面还能用（尤其是下载队列）。
+2. 启动 `python app.py` 手动过一遍受影响的界面（尤其是下载队列），注意它会连真实的接口服务。
 3. 如果改了前后端接口，同步更新 `API_CONTRACT.md`。
 4. 不要提交 `session.json`、`settings.json`、`downloads.json`、任何音频/歌词文件或 `.venv`
    （`.gitignore` 已覆盖，但请自己确认 `git status` 干净）。

@@ -52,8 +52,8 @@
 - 该服务默认启用第三方音源解锁（`ENABLE_GENERAL_UNBLOCK=true`）。本项目只使用官方接口，
   建议启动时设为 `false`（见上面的命令）。
 - 出于安全考虑，接口地址仅允许本机回环地址（`127.0.0.1` / `localhost` / `::1`），不支持指向远程服务。
-- 可选：`ffmpeg`（**测试与演示模式都需要**）、`zenity` 或 `kdialog`（Linux 的“选择目录”按钮；
-  Windows 自动改用系统对话框）、`qrcode`（仅演示模式显示二维码图片，缺省时显示占位提示而不报错）。
+- 可选：`ffmpeg`（仅测试需要，用于生成测试音频）、`zenity` 或 `kdialog`（Linux 的“选择目录”按钮；
+  Windows 会自动改用系统对话框）。
 
 ## 快速开始
 
@@ -83,7 +83,6 @@ python3 -m venv .venv
 | --- | --- |
 | `--port 36523` | 指定网页端口 |
 | `--data-dir 目录` | 指定配置与会话目录（默认 Linux `~/.config/shiyin-downloader`，Windows `%APPDATA%\shiyin-downloader`） |
-| `--demo` | 离线演示模式：本地模拟账号和 5 秒测试音频，不连接真实接口、不下载真实歌曲（数据目录默认位于系统缓存目录，需要 ffmpeg） |
 | `--no-browser` | 不自动打开浏览器 |
 
 ## 使用流程
@@ -163,8 +162,7 @@ python3 -m venv .venv
 
 ![歌单详情](docs/screenshot-playlist.png)
 
-下载队列（16 个任务、4 个并发进行中、8 个已完成、总体 50%；截图为演示模式的 40 KB 测试音频，
-真实歌曲会显示渐变进度与实时速度）：
+下载队列（16 个任务、4 个并发进行中、8 个已完成、总体 50%）：
 
 ![下载队列](docs/screenshot-queue.png)
 
@@ -183,7 +181,7 @@ python3 -m venv .venv
   在哪个系统跑就在哪个系统建一次（或分别用 `.venv-linux` / `.venv-win`）。
 - 顺便提醒：`--data-dir` 也不建议放在共享分区，两个系统各用各的用户目录更省心。
 - 换行符已由 `.gitattributes` 统一（`.sh` 用 LF，`.bat`/`.ps1` 用 CRLF），跨系统编辑不会产生整文件差异。
-- 测试与演示模式需要 `ffmpeg`：`winget install Gyan.FFmpeg` 或 `choco install ffmpeg`，装完确认 `ffmpeg -version` 可用。
+- 测试需要 `ffmpeg`：`winget install Gyan.FFmpeg` 或 `choco install ffmpeg`，装完确认 `ffmpeg -version` 可用。
 
 ## 常见问题
 
@@ -205,7 +203,6 @@ python3 -m venv .venv
 | `core.py` | 设置存取与校验、会话 Cookie、网易云接口调用、歌单分页、下载地址解析 |
 | `downloader.py` | 多线程下载队列：并发调度、重试、取消、进度、原子落盘 |
 | `lyrics.py` | 歌词合并与音频标签写入（MP3 / FLAC / M4A / OGG / Opus） |
-| `demo.py` | 离线演示模式的模拟账号与本地测试音频 |
 | `templates/index.html`、`static/app.css`、`static/app.js` | 网页界面（原生 HTML/CSS/JS，无打包步骤） |
 | `run.sh`、`run.ps1`、`run.bat` | 一键启动脚本（Linux/macOS、Windows） |
 | `requirements.txt`、`requirements-dev.txt` | 运行与开发依赖 |
@@ -234,7 +231,6 @@ python3 -m venv .venv
 
 ```bash
 python -m pytest tests/ -q     # 需要 ffmpeg 生成音频样本
-python app.py --demo           # 演示模式，用来验证登录之外的完整交互
 ```
 
 测试**不访问外网**：歌词与标签测试用本机 ffmpeg 生成样本音频，
@@ -267,8 +263,8 @@ python app.py --demo           # 演示模式，用来验证登录之外的完�
 所有 AI 生成内容都经过人工复核，但**仍可能包含错误、过时描述或安全隐患**；请不要把它用于高风险或
 合规敏感的场景，作者不对使用后果作出任何担保。
 
-你可以自行验证实际行为：运行 `python -m pytest tests/ -q`（需 ffmpeg），
-或运行 `python app.py --demo` 在离线演示模式下走一遍完整交互。
+你可以自行验证实际行为：运行 `python -m pytest tests/ -q`（需 ffmpeg），它会用本地夹具覆盖歌词合并、
+命名去重、落盘、取消重试与接口客户端等行为。
 
 发现问题的欢迎提 Issue。本项目不保证与任何第三方服务或软件的行为一致。
 

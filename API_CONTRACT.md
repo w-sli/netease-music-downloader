@@ -19,12 +19,11 @@
 
 | 接口 | 请求 | 响应 |
 | --- | --- | --- |
-| `GET /api/bootstrap` | — | `{csrf, settings, qualities:[{value,label}], user, demo, api_available}` |
+| `GET /api/bootstrap` | — | `{csrf, settings, qualities:[{value,label}], user, api_available}` |
 | `GET /api/session` | — | `{user}`，向接口重新确认登录状态 |
 | `POST /api/cache/clear` | — | `{cleared:n}` 丢弃服务端缓存的歌单详情（前端“刷新歌单”会调用） |
 
 `user` 未登录为 `null`，已登录为 `{userId,nickname,avatarUrl}`。
-`demo` 为 `true` 时页面必须显示演示标识。
 
 ## 登录
 
@@ -115,9 +114,3 @@ settings 字段：`api_base`、`download_dir`、`quality`、`workers`(1–12)、
 
 单任务操作为 `retry`（失败/已取消的任务）与 `cancel`（等待中或进行中）。
 
-## 演示模式
-
-`--demo` 时后端替换为 `demo.DemoAPI`，提供固定的模拟账号（本地演示用户）、三个演示歌单、
-8 首测试音轨（ID `80001`–`80008`，5 秒正弦波，由 ffmpeg 现场生成）与本地歌词。
-接口面与真实实现完全一致，音频由 `/demo/audio/<ext>` 以限速方式提供，
-便于在离线条件下验证队列、进度、取消与标签写入。页面必须明显标识演示状态。

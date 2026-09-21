@@ -19,15 +19,12 @@ app.py            HTTP 层：路由、CSRF/Host 校验、设置读写、把请�
  ├─ core.py       配置与会话（Store）、接口客户端（Netease）、文件名清洗（safe_name）
  ├─ downloader.py 下载队列（DownloadManager）：并发调度、进度、重试、取消、落盘
  │   └─ lyrics.py 歌词合并（merge_lyrics）与写标签（write_tags），完全离线
- └─ demo.py       离线替身（仅 --demo），实现与 Netease 相同的接口面
 static/app.js     前端逻辑：轮询队列、渲染、调用 /api
 templates/index.html 单页模板（图标为内联 SVG，无外部依赖）
 ```
 
 依赖是单向的：**`app` → `downloader` → (`core`, `lyrics`)**。
 `core` 与 `lyrics` 互不依赖，`downloader` 不导入 `app`。
-`demo.py` 只依赖 `core` 的 `UserError`，并且只被 `app` 在 `--demo` 时导入。
-
 `Netease` 与 `DemoAPI` 必须保持**相同的方法面**（`available/profile/login/playlists/playlist/songs/resolve/lyric/call`）——
 队列只认方法名，换实现不需要改 `downloader.py`。
 
@@ -100,10 +97,9 @@ cookie 库（`<profile>/Cookies`，SQLite）。实现要点：
 | --- | --- |
 | Linux/macOS | `$XDG_CONFIG_HOME/shiyin-downloader`（缺省 `~/.config/shiyin-downloader`） |
 | Windows | `%APPDATA%\shiyin-downloader` |
-| `--demo` | 系统缓存目录下的 `shiyin-demo`（Linux `~/.cache/`、Windows `%LOCALAPPDATA%`） |
 
 内容：`settings.json`（设置）、`session.json`（账号 Cookie，POSIX 权限 600）、
-`downloads.json`（队列记录）、`fixtures/`（仅演示模式的测试音频）。
+`downloads.json`（队列记录）。
 
 ### 5.2 `settings.json`
 
@@ -197,8 +193,8 @@ python -m pytest tests/ -q      # 66 项，需要 ffmpeg
 
 ## 9. 调试
 
-- 界面问题先用 `python app.py --demo`：离线、数据可预测、可反复重来（删掉缓存目录里的
-  `shiyin-demo` 即可复位）。
+- 界面相关的问题可以用测试替身复现：`tests/test_auth_api.py` 里的 `StubAuthAPI` 展示了
+  如何注入一个假接口跑真实路由；下载流程则用 `tests/test_downloader.py` 的本地 HTTP 夹具。
 - 服务端只把异常类型与消息写进日志（不写堆栈，避免把 Cookie 写进日志）。需要更多信息时
   在本地临时加 `app.logger.exception(...)`，**不要提交**。
 - 常见症状对照：

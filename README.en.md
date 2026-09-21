@@ -51,8 +51,8 @@ design trade-offs) · [HTTP API reference](API_CONTRACT.md) · [Contributing](CO
 - The service ships a third-party source unlocker enabled by default
   (`ENABLE_GENERAL_UNBLOCK=true`). This project uses official endpoints only; set it to `false`.
 - Only loopback API addresses are accepted; remote hosts are rejected on purpose.
-- Optional: `ffmpeg` (needed for tests and `--demo`), `zenity`/`kdialog` (Linux folder
-  picker — Windows uses the native dialog), `qrcode` (demo QR image only).
+- Optional: `ffmpeg` (tests only, to generate audio fixtures), `zenity`/`kdialog` (Linux
+  folder picker — Windows uses the native dialog).
 
 ## Quick start
 
@@ -82,7 +82,6 @@ Then open <http://127.0.0.1:36523>.
 | --- | --- |
 | `--port 36523` | Web UI port |
 | `--data-dir DIR` | Settings/session folder (default `~/.config/shiyin-downloader`, Windows `%APPDATA%\shiyin-downloader`) |
-| `--demo` | Offline demo: fake account and 5-second test audio, no real API or downloads |
 | `--no-browser` | Do not open a browser |
 
 ## Notes on quality
@@ -110,8 +109,8 @@ Although all AI-generated content was reviewed and tested, it may still contain 
 outdated statements or security weaknesses. Do not rely on it for high-stakes or
 compliance-sensitive use; no warranty is provided.
 
-Verify the behaviour yourself with `python -m pytest tests/ -q` (needs ffmpeg) or the
-offline demo `python app.py --demo`.
+Verify the behaviour yourself with `python -m pytest tests/ -q` (needs ffmpeg): the suite
+covers lyric merging, naming/dedupe, committing, cancel/retry and the API client.
 
 ## Disclaimer & license
 

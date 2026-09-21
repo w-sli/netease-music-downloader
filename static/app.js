@@ -3,7 +3,7 @@
 'use strict';
 
 const state = {
-  csrf: '', demo: false, user: null, settings: null, qualities: [], apiAvailable: true,
+  csrf: '', user: null, settings: null, qualities: [], apiAvailable: true,
   playlists: [], filter: 'all', query: '',
   current: null, selected: new Set(), importMode: 'playlist',
   queue: null, queueFilter: 'all', queueQuery: '',
@@ -211,9 +211,6 @@ function renderUser() {
       avatar.appendChild(icon('user'));
     }
   }
-  show($('#demo-badge'), state.demo);
-  show($('#demo-notice'), state.demo);
-  show($('#auth-demo-notice'), state.demo);
   const profileAvatar = $('#profile-avatar');
   if (profileAvatar) {
     profileAvatar.textContent = '';
@@ -243,7 +240,6 @@ function closeDialog(id) {
 async function openAuth() {
   setInline('auth-error', '');
   openDialog('auth-dialog');
-  if (state.demo) { text($('#qr-status'), '演示模式：无需真实扫码'); return; }
   startQr();
 }
 
@@ -1086,7 +1082,7 @@ async function checkApi() {
     state.apiAvailable = ok;
     badge.textContent = '';
     badge.appendChild(el('span', 'status-dot' + (ok ? '' : ' offline')));
-    badge.appendChild(el('span', null, state.demo ? '演示音频源' : ok ? '音乐接口已连接' : '音乐接口未连接'));
+    badge.appendChild(el('span', null, ok ? '音乐接口已连接' : '音乐接口未连接'));
   } catch (error) {
     badge.textContent = '';
     badge.appendChild(el('span', 'status-dot offline'));
@@ -1220,7 +1216,7 @@ function bind() {
         const panel = document.getElementById('auth-' + other.dataset.authTab);
         if (panel) show(panel, active);
       });
-      if (tab.dataset.authTab === 'qr' && !state.demo) startQr(); else stopQr();
+      if (tab.dataset.authTab === 'qr') startQr(); else stopQr();
     };
     tab.addEventListener('click', activate);
     tab.addEventListener('keydown', (event) => {
@@ -1244,7 +1240,6 @@ async function boot() {
   try {
     const data = await api('/bootstrap');
     state.csrf = data.csrf;
-    state.demo = !!data.demo;
     state.user = data.user || null;
     state.settings = data.settings;
     state.qualities = data.qualities || [];

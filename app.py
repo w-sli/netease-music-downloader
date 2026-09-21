@@ -34,22 +34,11 @@ def default_data_dir():
     return Path(base) / "shiyin-downloader"
 
 
-def default_demo_dir():
-    if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
-        return Path(base) / "shiyin-demo"
-    return Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")) / "shiyin-demo"
-
-
-def create_app(data_dir=None, demo=False, port=36523, api=None):
+def create_app(data_dir=None, port=36523, api=None):
     app = Flask(__name__)
     app.config.update(MAX_CONTENT_LENGTH=1024 * 1024)
     app.json.ensure_ascii = False
     store = Store(data_dir or default_data_dir())
-    if demo:
-        from demo import DemoAPI
-        store.settings["download_dir"] = str(store.directory / "demo-downloads")
-        api = DemoAPI(store, f"http://127.0.0.1:{port}")
     api = api or Netease(store)
     manager = DownloadManager(store, api)
     csrf = secrets.token_urlsafe(32)
@@ -132,15 +121,31 @@ def create_app(data_dir=None, demo=False, port=36523, api=None):
         with playlist_lock:
             playlist_cache.clear()
 
+    session_probe = {"done": False}
+
+    def resolve_saved_session():
+        """进程启动时 store.user 是空的：磁盘上有会话就恢复一次，避免界面显示成未登录。
+
+        只试一次（失败不重试），显式调用 /api/session 时仍会重新校验。
+        """
+        if store.user is not None or not store.cookie or session_probe["done"]:
+            return
+        session_probe["done"] = True
+        try:
+            store.user = api.profile()
+        except UserError:
+            store.user = None
+
     @app.get("/")
     def index():
         return render_template("index.html")
 
     @app.get("/api/bootstrap")
     def bootstrap():
+        resolve_saved_session()
         return jsonify(csrf=csrf, settings=store.settings,
                        qualities=[{"value": value, "label": label} for value, label in QUALITIES],
-                       user=store.user, demo=demo, api_available=api.available())
+                       user=store.user, api_available=api.available())
 
     @app.get("/api/session")
     def session_status():
@@ -385,19 +390,6 @@ def create_app(data_dir=None, demo=False, port=36523, api=None):
         payload = json.dumps(manager.snapshot(), ensure_ascii=False, indent=2).encode("utf-8")
         return send_file(io.BytesIO(payload), mimetype="application/json", as_attachment=True, download_name="shiyin-downloads.json")
 
-    if demo:
-        @app.get("/demo/audio/<ext>")
-        def demo_audio(ext):
-            if ext not in {"mp3", "flac"}:
-                return "", 404
-            path = api.folder / ("sample." + ext)
-            def chunks():
-                with path.open("rb") as f:
-                    while chunk := f.read(2048):
-                        time.sleep(.1)
-                        yield chunk
-            return Response(chunks(), content_type="audio/mpeg" if ext == "mp3" else "audio/flac", headers={"Content-Length": str(path.stat().st_size)})
-
     return app
 
 
@@ -405,7 +397,6 @@ def main():
     parser = argparse.ArgumentParser(description="拾音 · 本地多线程歌单下载器")
     parser.add_argument("--port", type=int, default=36523)
     parser.add_argument("--data-dir", type=Path)
-    parser.add_argument("--demo", action="store_true", help="使用独立的离线演示账号和测试音频")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
@@ -418,16 +409,14 @@ def main():
         except (AttributeError, ValueError):
             pass
     data_dir = args.data_dir
-    if args.demo and data_dir is None:
-        data_dir = default_demo_dir()
-    app = create_app(data_dir, args.demo, args.port)
+    app = create_app(data_dir, args.port)
     try:
         server = make_server("127.0.0.1", args.port, app, threaded=True)
     except SystemExit:
         app.extensions["downloads"].close()
         raise
     address = f"http://127.0.0.1:{args.port}"
-    print(f"拾音已启动：{address}" + ("（离线演示）" if args.demo else ""), flush=True)
+    print(f"拾音已启动：{address}", flush=True)
     if not args.no_browser:
         opener = threading.Timer(.5, lambda: webbrowser.open(address))
         opener.daemon = True
