@@ -18,7 +18,9 @@ design trade-offs) · [HTTP API reference](API_CONTRACT.md) · [Contributing](CO
 
 ## Features
 
-- **Login**: QR code, SMS code, or pasting your own cookie.
+- **Login (optional)**: public playlists and free tracks work without logging in;
+  logging in (QR code, SMS code, or pasting your own cookie) adds your personal playlists,
+  paid tracks and higher quality tiers.
 - **Single track**: paste a song share link or id and download it directly — no playlist needed.
 - **Your playlists**: all created and saved playlists (paged automatically), plus public
   playlists by link or id.
