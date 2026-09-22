@@ -378,8 +378,8 @@ function syncSplayerEntry() {
   if (button) button.hidden = !(state.settings && state.settings.splayer_login);
 }
 
-  event.preventDefault();
 async function cookieLogin(event) {
+  event.preventDefault();
   const button = $('#cookie-login-button');
   const input = $('#cookie-input');
   setInline('auth-error', '');
