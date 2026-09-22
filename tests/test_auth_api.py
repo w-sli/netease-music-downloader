@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 import app as app_module
-from core import DEFAULTS
+from core import DEFAULTS, UserError
 
 
 class StubAuthAPI:
@@ -156,6 +156,37 @@ class SplayerLoginApiTests(unittest.TestCase):
     def test_without_a_cookie_bootstrap_does_not_probe(self):
         self.stub.user = {"userId": 777, "nickname": "不该出现", "avatarUrl": ""}
         self.assertIsNone(self.client.get("/api/bootstrap").get_json()["user"])
+
+
+class SmsCooldownApiTests(unittest.TestCase):
+    """短信验证码冷却：发送失败不该让用户白等 60 秒（全程用替身接口，不发真实短信）。"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="sms-api-tests-")
+        self.addCleanup(self.temp.cleanup)
+        self.stub = StubAuthAPI()
+        self.app = app_module.create_app(Path(self.temp.name) / "cfg", port=36997, api=self.stub)
+        self.addCleanup(self.app.extensions["downloads"].close)
+        self.client = self.app.test_client()
+        self.csrf = self.client.get("/api/bootstrap").get_json()["csrf"]
+
+    def post(self, payload):
+        return self.client.post("/api/auth/sms/send", json=payload, headers={"X-CSRF-Token": self.csrf})
+
+    def test_failed_send_releases_the_cooldown(self):
+        with mock.patch.object(self.stub, "call", side_effect=UserError("模拟接口故障")):
+            self.assertEqual(self.post({"phone": "13800000000"}).status_code, 400)
+        self.assertEqual(self.post({"phone": "13800000000"}).status_code, 200)
+
+    def test_successful_send_holds_the_cooldown(self):
+        self.assertEqual(self.post({"phone": "13900000001"}).status_code, 200)
+        blocked = self.post({"phone": "13900000001"})
+        self.assertEqual(blocked.status_code, 400)
+        self.assertIn("60 秒", blocked.get_json()["error"])
+
+    def test_invalid_phone_is_rejected_before_calling_the_api(self):
+        with mock.patch.object(self.stub, "call", side_effect=AssertionError("不该调用接口")):
+            self.assertEqual(self.post({"phone": "12"}).status_code, 400)
 
 
 if __name__ == "__main__":

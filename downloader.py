@@ -1,7 +1,6 @@
 """Persistent song-level thread pool with verified, atomic file delivery."""
 from __future__ import annotations
 
-import copy
 import hashlib
 import os
 import shutil
@@ -91,16 +90,13 @@ class DownloadManager:
         self.store, self.api = store, api
         self.file = store.directory / "downloads.json"
         self.condition = threading.Condition(threading.RLock())
-        self.jobs = read_json(self.file, [])
-        if not isinstance(self.jobs, list):
-            self.jobs = []
+        known = read_json(self.file, [])
+        self.jobs = [job for job in (known if isinstance(known, list) else []) if isinstance(job, dict)]
         self.paused = False
         self.closed = False
         self.active = set()
         self.cancel_events = {}
         self.owners = {}
-        known = read_json(self.file, [])
-        self.jobs = [job for job in (known if isinstance(known, list) else []) if isinstance(job, dict)]
         for job in self.jobs:
             # Tolerate hand-edited or older records instead of failing per task.
             job["settings"] = DEFAULTS | (job.get("settings") or {})
@@ -138,13 +134,19 @@ class DownloadManager:
         atomic_json(self.file, self.jobs)
 
     def snapshot(self):
+        """Copy the queue for the UI, leaving out each job's own payload.
+
+        The lock is released before Flask serialises the response, so every
+        mutable value has to be copied here; `warnings` is the only field that
+        is not a plain scalar. Copying first and trimming afterwards would walk
+        the whole song/settings payload of every job on each poll.
+        """
         with self.condition:
-            jobs = copy.deepcopy(self.jobs)
+            jobs = [{key: value for key, value in job.items()
+                     if key not in {"settings", "song", "target_key"}} for job in self.jobs]
+            for job in jobs:
+                job["warnings"] = list(job.get("warnings") or [])
             counts = Counter(j["status"] for j in jobs)
-            for j in jobs:
-                j.pop("settings", None)
-                j.pop("song", None)
-                j.pop("target_key", None)
             return dict(jobs=list(reversed(jobs)), summary=dict(total=len(jobs), queued=counts["queued"],
                         active=sum(counts[s] for s in ACTIVE), completed=counts["completed"],
                         failed=counts["failed"], paused=counts["queued"] if self.paused else 0,
@@ -358,16 +360,19 @@ class DownloadManager:
                 try:
                     # Ask the CDN for a resized cover: the raw URL can be the
                     # original upload, which for some tracks is a multi-megabyte PNG.
-                    with requests.get(cover_url(song["cover"]), timeout=(5, 12), stream=True,
-                                      allow_redirects=True) as r:
-                        r.raise_for_status()
-                        chunks = bytearray()
-                        for chunk in r.iter_content(65536):
-                            self._check(event)
-                            chunks.extend(chunk)
-                            if len(chunks) > MAX_COVER_BYTES:
-                                raise UserError("封面超过 8 MB")
-                        cover = bytes(chunks)
+                    with requests.Session() as session:
+                        # Same rule as the audio transfer: no system proxy.
+                        session.trust_env = False
+                        with session.get(cover_url(song["cover"]), timeout=(5, 12), stream=True,
+                                         allow_redirects=True) as r:
+                            r.raise_for_status()
+                            chunks = bytearray()
+                            for chunk in r.iter_content(65536):
+                                self._check(event)
+                                chunks.extend(chunk)
+                                if len(chunks) > MAX_COVER_BYTES:
+                                    raise UserError("封面超过 8 MB")
+                            cover = bytes(chunks)
                 except Cancelled:
                     raise
                 except Exception:

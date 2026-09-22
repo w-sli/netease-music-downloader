@@ -31,7 +31,7 @@
 | --- | --- | --- |
 | `POST /api/auth/qr` | — | `{key,image,url}`，`image` 是二维码 data URL |
 | `POST /api/auth/qr/check` | `{key}` | `{code,message,user?}`：800 过期 / 801 待扫码 / 802 待确认 / 803 成功 |
-| `POST /api/auth/sms/send` | `{phone,countrycode}` | `{ok:true}`，同一号码 60 秒内只允许发一次 |
+| `POST /api/auth/sms/send` | `{phone,countrycode}` | `{ok:true}`，同一号码 60 秒内只允许发一次（发送失败不占用这次冷却） |
 | `POST /api/auth/sms/login` | `{phone,countrycode,captcha}` | `{user}` |
 | `POST /api/auth/cookie` | `{cookie}` | `{user}`，Cookie 由用户自行从浏览器复制 |
 | `POST /api/auth/logout` | — | `{ok:true}` |

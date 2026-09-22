@@ -39,7 +39,6 @@ function icon(name) {
 function setBusy(button, busy, label) {
   if (!button) return;
   if (busy) {
-    button.dataset.label = button.dataset.label || '';
     button.disabled = true;
     button.classList.add('is-loading');
     if (!button.querySelector('.spinner')) button.prepend(el('span', 'spinner'));
@@ -293,21 +292,26 @@ async function sendSms() {
   const country = $('#sms-country').value.trim() || '86';
   setInline('auth-error', '');
   setBusy(button, true);
+  let sent = false;
   try {
     await api('/auth/sms/send', { method: 'POST', body: { phone: phone, countrycode: country } });
+    sent = true;
     text($('#sms-status'), '验证码已发送，请查看手机短信');
     let remain = 60;
     if (state.smsTimer) clearInterval(state.smsTimer);
+    // 只收掉 loading 态，解禁交给倒计时：否则 60 秒冷却形同虚设
+    setBusy(button, false);
+    button.disabled = true;
     text(button, '重新发送（' + remain + 's）');
     state.smsTimer = setInterval(() => {
       remain -= 1;
-      if (remain <= 0) { clearInterval(state.smsTimer); state.smsTimer = null; text(button, '获取验证码'); button.disabled = false; return; }
+      if (remain <= 0) { clearInterval(state.smsTimer); state.smsTimer = null; text(button, '获取验证码'); setBusy(button, false); return; }
       text(button, '重新发送（' + remain + 's）');
     }, 1000);
   } catch (error) {
     setInline('auth-error', errorMessage(error));
   } finally {
-    setBusy(button, false);
+    if (!sent) setBusy(button, false);
   }
 }
 

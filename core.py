@@ -62,8 +62,18 @@ class Store:
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.lock = threading.RLock()
         self.settings = self._load_settings()
-        self.cookie = read_json(self.directory / "session.json", {}).get("cookie", "")
+        self.cookie = self._load_cookie()
         self.user = None
+
+    def _load_cookie(self):
+        """session.json is hand-editable too: a valid JSON file that is not an
+        object must not stop the service from starting, and a non-string value
+        must never reach the Cookie header."""
+        raw = read_json(self.directory / "session.json", {})
+        if not isinstance(raw, dict):
+            return ""
+        cookie = raw.get("cookie", "")
+        return cookie if isinstance(cookie, str) else ""
 
     def _load_settings(self):
         """settings.json is untrusted input: a hand-edited or older file must not
@@ -299,7 +309,8 @@ class Netease:
                 data = items[0] if items else None
             if not data or not data.get("url"):
                 raise UserError(reason or "没有可用下载地址：可能需要登录、会员，或歌曲已下架。")
-        if data.get("freeTrialInfo") or data.get("freeTrialPrivilege", {}).get("listenType") == 1:
+        trial = data.get("freeTrialPrivilege")
+        if data.get("freeTrialInfo") or (isinstance(trial, dict) and trial.get("listenType") == 1):
             raise UserError("接口只返回试听片段，未下载为完整歌曲。")
         url = data["url"]
         if urlparse(url).scheme not in ("http", "https"):
@@ -308,11 +319,20 @@ class Netease:
         ext = {"mp4": "m4a", "mpeg": "mp3"}.get(ext, ext)
         if ext not in {"mp3", "flac", "m4a", "aac", "ogg", "opus", "wav"}:
             raise UserError(f"接口返回了不支持的音频类型：{ext}")
-        actual = data.get("level") or (f"{int(data['br']) // 1000} kbps" if data.get("br") else "接口未报告")
+        actual = data.get("level") or bitrate_label(data.get("br"))
         return {"url": url, "ext": ext, "actual_quality": actual, "size": int(data.get("size") or 0), "md5": data.get("md5")}
 
     def lyric(self, song_id):
         return self.call("/lyric/new", {"id": song_id})
+
+
+def bitrate_label(br):
+    """Describe the reported bitrate without making it a failure condition: a
+    missing or non-numeric value must not stop a song from downloading."""
+    try:
+        return f"{int(br) // 1000} kbps" if br else "接口未报告"
+    except (TypeError, ValueError):
+        return "接口未报告"
 
 
 def normalize_song(song):

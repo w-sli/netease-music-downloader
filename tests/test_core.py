@@ -90,6 +90,21 @@ class StoreTests(unittest.TestCase):
         (directory / "settings.json").write_text("{not json", encoding="utf-8")
         self.assertEqual(Store(directory).settings, dict(DEFAULTS))
 
+    def test_session_file_cookie_is_read_back(self):
+        directory = self.root / "session-ok"
+        directory.mkdir()
+        (directory / "session.json").write_text(json.dumps({"cookie": "MUSIC_U=abc"}), encoding="utf-8")
+        self.assertEqual(Store(directory).cookie, "MUSIC_U=abc")
+
+    def test_tampered_session_file_does_not_stop_startup(self):
+        """session.json 是手改得动的文件：坏内容不能把服务拦在启动阶段。"""
+        for index, content in enumerate(("[]", '"MUSIC_U=x"', '{"cookie": 123}', "null", "{not json")):
+            with self.subTest(content=content):
+                directory = self.root / f"session-bad-{index}"
+                directory.mkdir()
+                (directory / "session.json").write_text(content, encoding="utf-8")
+                self.assertEqual(Store(directory).cookie, "")
+
     def test_update_rejects_wrong_types_without_crashing(self):
         store = Store(self.root / "cfg4")
         for bad in (123, None, 1.5, ["http://127.0.0.1"]):
@@ -191,6 +206,42 @@ class PlaylistParsingTests(unittest.TestCase):
         })
         result = api.playlists()
         self.assertEqual([p["id"] for p in result], [1])
+
+
+class DownloadUrlTests(unittest.TestCase):
+    """下载地址解析：字段缺失或为空时，不能把可下载的歌判成失败。"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="resolve-tests-")
+        self.addCleanup(self.temp.cleanup)
+        self.store = Store(Path(self.temp.name) / "cfg")
+
+    def api(self, data):
+        return _FakeNetease(self.store, {"/song/download/url/v1": {"data": data}})
+
+    def test_null_privilege_fields_do_not_raise(self):
+        resource = self.api({"url": "http://cdn.example.com/a.mp3", "type": "mp3",
+                             "freeTrialInfo": None, "freeTrialPrivilege": None,
+                             "br": "未知"}).resolve(1, "exhigh")
+        self.assertEqual(resource["url"], "http://cdn.example.com/a.mp3")
+        self.assertEqual(resource["ext"], "mp3")
+        self.assertEqual(resource["actual_quality"], "接口未报告")
+
+    def test_bitrate_is_still_reported_when_present(self):
+        resource = self.api({"url": "http://cdn.example.com/a.flac", "type": "flac",
+                             "br": 320000}).resolve(1, "lossless")
+        self.assertEqual(resource["actual_quality"], "320 kbps")
+
+    def test_trial_only_response_is_refused(self):
+        api = self.api({"url": "http://cdn.example.com/a.mp3", "type": "mp3",
+                        "freeTrialPrivilege": {"listenType": 1}})
+        with self.assertRaises(UserError):
+            api.resolve(1, "exhigh")
+
+    def test_non_http_url_is_refused(self):
+        api = self.api({"url": "file:///etc/passwd", "type": "mp3"})
+        with self.assertRaises(UserError):
+            api.resolve(1, "exhigh")
 
 
 class SplayerCookieTests(unittest.TestCase):

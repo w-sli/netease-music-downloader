@@ -212,10 +212,17 @@ def create_app(data_dir=None, port=36523, api=None):
         with login_lock:
             if now - sms_times.get(key, -1000) < 60:
                 raise UserError("验证码发送后请等待 60 秒")
+            # 先占位，两个并发请求不会重复发送；发送失败再释放，免得白等 60 秒
             sms_times[key] = now
             for stale in [k for k, t in sms_times.items() if now - t > 3600]:
                 sms_times.pop(stale, None)
-        api.call("/captcha/sent", {"phone": phone, "ctcode": country}, cookie="")
+        try:
+            api.call("/captcha/sent", {"phone": phone, "ctcode": country}, cookie="")
+        except Exception:
+            with login_lock:
+                if sms_times.get(key) == now:
+                    sms_times.pop(key, None)
+            raise
         return jsonify(ok=True)
 
     @app.post("/api/auth/sms/login")
