@@ -1,6 +1,7 @@
 """Download queue naming, dedupe, skip and commit behaviour (local fixtures only)."""
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -255,6 +256,54 @@ class QueueNamingTests(unittest.TestCase):
         self.assertEqual(manager.active, set(), "并发槽位不应泄漏")
         self.assertEqual(manager.owners, {}, "所有权令牌不应残留")
         self.assertFalse(list(self.out.glob(".shiyin-*")), "临时文件应已清理")
+
+    def test_hand_edited_records_cannot_steer_paths(self):
+        """审计加固：手改的 downloads.json 既不能崩掉加载器，也不能把写入引去别处。"""
+        records = [
+            {"id": "not-hex", "song_id": "1001", "name": "同一首歌", "artists": "同一位歌手",
+             "album": "测试专辑", "playlist": "测试歌单", "playlist_id": "../../x",
+             "single": False, "status": "failed", "progress": 0, "downloaded": 0,
+             "total": 0, "speed": 0, "quality": "exhigh", "actual_quality": "",
+             "path": "", "error": "", "warnings": [], "attempt": 0,
+             "settings": dict(self.store.settings), "target_key": "/tmp/evil/1001-exhigh"},
+            {"id": "0" * 32, "song_id": 1002, "name": "另一首歌", "artists": "同一位歌手",
+             "album": "测试专辑", "playlist": "测试歌单", "playlist_id": "123",
+             "single": False, "status": "failed", "progress": 0, "downloaded": 0,
+             "total": 0, "speed": 0, "quality": "exhigh", "actual_quality": "",
+             "path": "", "error": "", "warnings": [], "attempt": 0,
+             "settings": dict(self.store.settings), "target_key": "/tmp/evil/1002-exhigh"},
+        ]
+        self.store.directory.joinpath("downloads.json").write_text(
+            json.dumps(records), encoding="utf-8")
+        manager = self.build_manager()
+        first, second = manager.jobs
+        self.assertIsNone(first["playlist_id"])       # 无法解析的 id → 回退下载根目录
+        self.assertTrue(first["single"])
+        self.assertIn("任务记录损坏", first["error"])
+        self.assertNotEqual(first["id"], "not-hex")   # 非法 id 已重新生成
+        self.assertEqual(second["playlist_id"], 123)  # 字符串 id 被强转
+        self.store.settings["playlist_folder"] = True
+        manager._adopt_current_settings(second)       # 重试路径同样重导出目标键
+        self.assertTrue(path_key(second["target_key"]).startswith(path_key(self.out)))
+        self.assertIn("[123]", second["target_key"])
+        manager._adopt_current_settings(first)
+        self.assertTrue(path_key(first["target_key"]).startswith(path_key(self.out)))
+
+    def test_transfer_aborts_when_stream_exceeds_declared_size(self):
+        """审计加固：传输中限流——不做完整下载后才用 size 比对拒绝。"""
+
+        class UnderReporting(StubAPI):
+            def resolve(self, song_id, quality, fallback=False):
+                base = super().resolve(song_id, quality, fallback)
+                return dict(base, size=16, md5=None)
+
+        self.store.settings["retries"] = 0
+        self.manager = self.build_manager(api=UnderReporting(self.base_url, self.media / "sample.mp3"))
+        snap = self.run_queue(self.playlist(), [song(1401)])
+        job = snap["jobs"][0]
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("声明的文件大小", job["error"])
+        self.assertEqual(self.audio_files(), [])
 
     def test_leftover_temporary_files_are_swept_on_start(self):
         self.out.mkdir(parents=True, exist_ok=True)

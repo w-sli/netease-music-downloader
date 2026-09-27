@@ -236,6 +236,11 @@ class Netease:
         raw = self.call("/playlist/detail", {"id": playlist_id, "s": 0}).get("playlist")
         if not isinstance(raw, dict) or not raw:
             raise UserError("歌单不存在或当前账号无权访问")
+        try:
+            # 响应里的 id 会进文件路径（任务目录名）：与 trackIds 同样过边界。
+            response_id = int(raw.get("id"))
+        except (TypeError, ValueError) as e:
+            raise UserError("歌单接口返回了无法识别的歌单 id") from e
         track_ids = raw.get("trackIds") if isinstance(raw.get("trackIds"), list) else []
         ids = []
         for entry in track_ids:
@@ -272,7 +277,8 @@ class Netease:
             count = len(ids)
         if count > len(ids):
             warnings.append(f"歌单标记 {count} 首，但接口只返回 {len(ids)} 个歌曲编号。")
-        return {"playlist": {k: raw.get(k) for k in ("id", "name", "coverImgUrl", "trackCount", "description")},
+        return {"playlist": {"id": response_id,
+                             **{k: raw.get(k) for k in ("name", "coverImgUrl", "trackCount", "description")}},
                 "songs": [songs[i] for i in ids if i in songs], "missing": missing, "warnings": warnings}
 
     def songs(self, song_ids):
@@ -344,7 +350,7 @@ def normalize_song(song):
                 duration=int(song.get("dt") or song.get("duration") or 0))
 
 
-_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+_RESERVED = {"CON", "PRN", "AUX", "NUL", "CLOCK$", *(f"COM{i}" for i in range(0, 10)), *(f"LPT{i}" for i in range(0, 10))}
 
 
 def splayer_data_dirs():

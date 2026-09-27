@@ -9,6 +9,7 @@ import time
 import uuid
 from collections import Counter
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
@@ -21,6 +22,7 @@ FINISHED = {"completed", "skipped", "cancelled"}
 CLAIMED = ACTIVE | {"queued", "completed", "skipped"}
 MAX_JOBS = 5000
 MAX_COVER_BYTES = 8 * 1024 * 1024
+MAX_AUDIO_BYTES = 2 * 1024 * 1024 * 1024
 
 
 def path_key(value):
@@ -69,7 +71,9 @@ def job_folder(settings, playlist_name, playlist_id):
     """
     folder = Path(settings["download_dir"])
     if settings["playlist_folder"] and playlist_name and playlist_id is not None:
-        folder /= safe_name(playlist_name, 65) + f" [{playlist_id}]"
+        # int() 是最后一道防线：调用点（API 响应 / 持久化记录）都应已给出发送整数，
+        # 但路径分量绝不信任未经强转的外部值。
+        folder /= safe_name(playlist_name, 65) + f" [{int(playlist_id)}]"
     return folder
 
 
@@ -99,11 +103,34 @@ class DownloadManager:
         self.owners = {}
         for job in self.jobs:
             # Tolerate hand-edited or older records instead of failing per task.
+            # ids are coerced and path keys re-derived on load, so a hand-edited
+            # file can neither crash the loader nor steer writes outside download_dir.
             job["settings"] = DEFAULTS | (job.get("settings") or {})
             if job.get("status") in ACTIVE:
                 job["status"] = "queued"
                 job["error"] = "上次运行中断，点击继续后重新下载"
             job["speed"] = 0
+            try:
+                job["song_id"] = int(job.get("song_id"))
+                playlist_id = job.get("playlist_id")
+                job["playlist_id"] = None if playlist_id is None else int(playlist_id)
+            except (TypeError, ValueError):
+                # id 无法解析：落到下载根目录并标记失败（重试经 _adopt_current_settings
+                # 重导出路径，同样安全）；已完成的历史记录保留状态仅作展示。
+                job["song_id"] = 0
+                job["playlist_id"] = None
+                job["single"] = True
+                if job["status"] not in FINISHED:
+                    job["status"] = "failed"
+                    job["error"] = "任务记录损坏（id 字段无法解析）；重试将保存到下载根目录"
+            job_id = job.get("id")
+            if not (isinstance(job_id, str) and len(job_id) == 32
+                    and all(c in "0123456789abcdef" for c in job_id)):
+                job["id"] = uuid.uuid4().hex
+            if job["status"] == "queued":
+                group_id = None if job.get("single") else job.get("playlist_id")
+                folder = job_folder(job["settings"], job.get("playlist"), group_id)
+                job["target_key"] = str(folder / f"{job['song_id']}-{job['settings']['quality']}")
         self._sweep_temporary_files()
         self.threads = [threading.Thread(target=self._worker, daemon=True, name=f"download-{i}") for i in range(12)]
         for t in self.threads:
@@ -356,14 +383,19 @@ class DownloadManager:
                 except Exception as e:
                     warnings.append(f"歌词获取失败：{e if isinstance(e, UserError) else '接口返回异常'}")
             cover = None
-            if settings["cover"] and song.get("cover"):
+            cover_source = song.get("cover") or ""
+            # 与音频 URL 同样过 scheme 白名单：封面也会作为字节写入本地文件。
+            if cover_source and urlparse(cover_source).scheme not in ("http", "https"):
+                warnings.append("封面地址不是 http(s) 链接，已跳过")
+                cover_source = ""
+            if settings["cover"] and cover_source:
                 try:
                     # Ask the CDN for a resized cover: the raw URL can be the
                     # original upload, which for some tracks is a multi-megabyte PNG.
                     with requests.Session() as session:
                         # Same rule as the audio transfer: no system proxy.
                         session.trust_env = False
-                        with session.get(cover_url(song["cover"]), timeout=(5, 12), stream=True,
+                        with session.get(cover_url(cover_source), timeout=(5, 12), stream=True,
                                          allow_redirects=True) as r:
                             r.raise_for_status()
                             chunks = bytearray()
@@ -419,6 +451,7 @@ class DownloadManager:
                 if "text/" in content_type or "json" in content_type or "html" in content_type:
                     raise UserError("下载地址返回了文本或错误页面，不是音频")
                 total = int(response.headers.get("Content-Length") or resource.get("size") or 0)
+                declared = resource.get("size") or 0
                 downloaded, start, last = 0, time.monotonic(), 0
                 self._update(job, status="downloading", total=total)
                 with target.open("wb") as f:
@@ -426,6 +459,11 @@ class DownloadManager:
                         self._check(event)
                         if not chunk:
                             continue
+                        # 传输中就限流：size 事后比对只能保证校验失败，挡不住磁盘被写满。
+                        if declared and downloaded + len(chunk) > declared:
+                            raise UserError("音频流超出接口声明的文件大小，已中止下载")
+                        if downloaded + len(chunk) > MAX_AUDIO_BYTES:
+                            raise UserError(f"音频流超过下载大小上限（{MAX_AUDIO_BYTES // 1024 // 1024} MB），已中止下载")
                         f.write(chunk)
                         digest.update(chunk)
                         downloaded += len(chunk)

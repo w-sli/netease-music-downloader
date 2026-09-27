@@ -158,6 +158,50 @@ class SplayerLoginApiTests(unittest.TestCase):
         self.assertIsNone(self.client.get("/api/bootstrap").get_json()["user"])
 
 
+class LocalFilterTests(unittest.TestCase):
+    """protect_local_app 的四层过滤分支与 /api 响应契约（审计加固：防回归）。"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="filter-tests-")
+        self.addCleanup(self.temp.cleanup)
+        self.stub = StubAuthAPI()
+        self.app = app_module.create_app(Path(self.temp.name) / "cfg", port=36996, api=self.stub)
+        self.addCleanup(self.app.extensions["downloads"].close)
+        self.client = self.app.test_client()
+
+    def get(self, headers=None, base_url=None):
+        kwargs = {"headers": headers or {}}
+        if base_url:
+            kwargs["base_url"] = base_url
+        return self.client.get("/api/bootstrap", **kwargs)
+
+    def test_foreign_host_is_refused(self):
+        self.assertEqual(self.get(base_url="http://evil.com").status_code, 403)
+
+    def test_rebind_style_host_is_refused(self):
+        self.assertEqual(self.get(base_url="http://127.0.0.1.evil.com").status_code, 403)
+
+    def test_ipv6_loopback_host_is_accepted(self):
+        self.assertEqual(self.get(base_url="http://[::1]:36523").status_code, 200)
+
+    def test_cross_site_fetch_site_is_refused(self):
+        self.assertEqual(self.get(headers={"Sec-Fetch-Site": "cross-site"}).status_code, 403)
+
+    def test_cross_origin_is_refused(self):
+        self.assertEqual(self.get(headers={"Origin": "http://evil.com"}).status_code, 403)
+
+    def test_non_browser_client_passes_filters(self):
+        # 无 Origin / Sec-Fetch-Site / cookie 的本机客户端：文档化的行为（见 SECURITY.md）
+        self.assertEqual(self.get().status_code, 200)
+
+    def test_api_responses_are_json_objects(self):
+        """顶层恒为 dict + application/json：老引擎无 Sec-Fetch-Site 时防脚本包含泄露。"""
+        for path in ("/api/bootstrap", "/api/downloads", "/api/settings"):
+            r = self.client.get(path)
+            self.assertTrue(r.content_type.startswith("application/json"), path)
+            self.assertIsInstance(r.get_json(), dict, path)
+
+
 class SmsCooldownApiTests(unittest.TestCase):
     """短信验证码冷却：发送失败不该让用户白等 60 秒（全程用替身接口，不发真实短信）。"""
 

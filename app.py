@@ -52,7 +52,10 @@ def create_app(data_dir=None, port=36523, api=None):
 
     @app.before_request
     def protect_local_app():
-        if request.host.split(":")[0] not in {"127.0.0.1", "localhost"}:
+        # urlparse 归一化主机名（小写、去端口与 IPv6 方括号）：[::1]:端口 形态不再被误拒，
+        # 而 127.0.0.1.evil.com 这类伪装主机名依然被拒。
+        hostname = urlparse(f"//{request.host}").hostname
+        if hostname not in {"127.0.0.1", "localhost", "::1"}:
             return jsonify(error="仅支持本机访问"), 403
         # A browser attaches Sec-Fetch-Site to every request; refusing cross-site
         # calls keeps other pages from driving this local service with the cookie.
@@ -76,9 +79,9 @@ def create_app(data_dir=None, port=36523, api=None):
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; img-src 'self' data: https://*.126.net http://*.126.net "
-            "https://*.music.126.net http://*.music.126.net http://127.0.0.1:*; "
-            "style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; "
-            "frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+            "https://*.music.126.net http://*.music.126.net; style-src 'self'; "
+            "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; "
+            "form-action 'self'")
         if request.path.startswith("/api"):
             response.headers["Cache-Control"] = "no-store"
         return response
@@ -91,8 +94,8 @@ def create_app(data_dir=None, port=36523, api=None):
     def unexpected(error):
         if isinstance(error, HTTPException):
             return jsonify(error=error.description), error.code
-        # Log the type only: request bodies and headers may carry the account cookie.
-        app.logger.error("Request failed: %s: %s", type(error).__name__, error)
+        # 头部与请求体可能携带账号 cookie：日志只写异常类型与截断后的消息。
+        app.logger.error("Request failed: %s: %.200s", type(error).__name__, error)
         return jsonify(error="操作未完成，请检查输入或重试。"), 500
 
     def body():

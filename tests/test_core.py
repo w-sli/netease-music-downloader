@@ -194,6 +194,18 @@ class PlaylistParsingTests(unittest.TestCase):
         result = api.playlist(1)
         self.assertEqual([s["id"] for s in result["songs"]], [42])
 
+    def test_playlist_id_from_response_is_coerced_to_int(self):
+        api = _FakeNetease(self.store, {"/playlist/detail": {"playlist": {
+            "id": "123", "name": "x", "trackIds": [], "trackCount": 0}}})
+        self.assertEqual(api.playlist(1)["playlist"]["id"], 123)
+
+    def test_playlist_id_with_path_metacharacters_is_refused(self):
+        """歌单 id 会进文件路径：响应里的 id 必须与 trackIds 同样过边界。"""
+        api = _FakeNetease(self.store, {"/playlist/detail": {"playlist": {
+            "id": "../../x", "name": "x", "trackIds": [], "trackCount": 0}}})
+        with self.assertRaises(UserError):
+            api.playlist(1)
+
     def test_non_dict_playlist_is_rejected(self):
         api = _FakeNetease(self.store, {"/playlist/detail": {"playlist": ["nope"]}})
         with self.assertRaises(UserError):
